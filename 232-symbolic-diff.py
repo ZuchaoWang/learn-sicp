@@ -5,6 +5,10 @@ def is_number(y):
 def is_variable(y):
     return isinstance(y, str)
 
+  
+def is_same_variable(y1, y2):
+    return y1 == y2
+
 
 def is_sum(y):
     return isinstance(y, dict) and y['type'] == 'sum'
@@ -56,10 +60,6 @@ def make_product(y1, y2):
         return {'type': 'product', 'y1': y1, 'y2': y2}
 
 
-def is_same_variable(y1, y2):
-    return y1 == y2
-
-
 def stringify_expr(y):
     if is_number(y):
         return str(y)
@@ -105,45 +105,12 @@ def test_one(y, x, dystr_exp):
 
 
 def test():
-    test_one({
-        'type': 'sum',
-        'y1': {
-            'type': 'product',
-            'y1': 'a',
-            'y2': 'x1'
-        },
-        'y2': {
-            'type': 'product',
-            'y1': 'b',
-            'y2': 'x2'
-        }
-    }, 'x1', 'a')
-    test_one({
-        'type': 'sum',
-        'y1': {
-            'type': 'product',
-            'y1': 'a',
-            'y2': 'x1'
-        },
-        'y2': {
-            'type': 'product',
-            'y1': 'b',
-            'y2': 'x2'
-        }
-    }, 'x2', 'b')
-    test_one({
-        'type': 'product',
-        'y1': {
-            'type': 'product',
-            'y1': 'x1',
-            'y2': 'x2'
-        },
-        'y2': {
-            'type': 'sum',
-            'y1': 'x1',
-            'y2': 3
-        }
-    }, 'x1', '((x2*(x1+3))+(x1*x2))')
+    test_one(make_sum(make_product('a', 'x1'),
+             make_product('b', 'x2')), 'x1', 'a')
+    test_one(make_sum(make_product('a', 'x1'),
+             make_product('b', 'x2')), 'x2', 'b')
+    test_one(make_product(make_product('x1', 'x2'),
+             make_sum('x1', 3)), 'x1', '((x2*(x1+3))+(x1*x2))')
 
 
 if __name__ == '__main__':
