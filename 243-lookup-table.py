@@ -16,6 +16,11 @@ def is_same_variable(y1, y2):
 table = {}
 
 
+def apply(fname, y, *args):
+    f = table[y['type']][fname]
+    return f(y['data'], *args)
+
+
 # general interface
 # we use this "make" to ensure make_sum/product function only available after dynamically installing them
 # it also ensures them to be a dict with type field, no matter how they are internally represented
@@ -31,8 +36,7 @@ def stringify_expr(y):
     elif is_variable(y):
         return y
     else:
-        f = table[y['type']]['stringify_expr']
-        return f(y['data'])
+        return apply('stringify_expr', y)
 
 
 def diff(y, x):
@@ -42,8 +46,7 @@ def diff(y, x):
     elif is_variable(y):
         return 1 if is_same_variable(y, x) else 0
     else:
-        f = table[y['type']]['diff']
-        return f(y['data'], x)
+        return apply('diff', y, x)
 
 
 # additional expr

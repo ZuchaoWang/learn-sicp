@@ -11,6 +11,10 @@ def is_same_variable(y1, y2):
     return y1 == y2
 
 
+def apply(fname, y, *args):
+    return y(fname, *args)
+
+
 # general interface
 
 def stringify_expr(y):
@@ -19,7 +23,7 @@ def stringify_expr(y):
     elif is_variable(y):
         return y
     else:
-        return y('stringify_expr')
+        return apply('stringify_expr', y)
 
 
 def diff(y, x):
@@ -29,7 +33,7 @@ def diff(y, x):
     elif is_variable(y):
         return 1 if is_same_variable(y, x) else 0
     else:
-        return y('diff', x)
+        return apply('diff', y, x)
 
 
 # additional expr
