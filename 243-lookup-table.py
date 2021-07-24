@@ -16,18 +16,24 @@ def is_same_variable(y1, y2):
 table = {}
 
 
+def extract_data(y):
+    return y['data']
+
+
+def add_type(etype, data):
+    return {'type': etype, 'data': data}
+
+
 def apply(fname, y, *args):
     f = table[y['type']][fname]
-    return f(y['data'], *args)
+    return f(y, *args)
 
 
 # general interface
 # we use this "make" to ensure make_sum/product function only available after dynamically installing them
-# it also ensures them to be a dict with type field, no matter how they are internally represented
 def make(etype, *args):
     f = table[etype]['make']
-    data, shortcut = f(*args)
-    return data if shortcut else {'type': etype, 'data': data}
+    return f(*args)
 
 
 def stringify_expr(y):
@@ -52,22 +58,21 @@ def diff(y, x):
 # additional expr
 
 def install_sum():
-    # here y is y['data']
     def get_addend1(y):
-        return y['y1']
+        return extract_data(y)['y1']
 
     def get_addend2(y):
-        return y['y2']
+        return extract_data(y)['y2']
 
     def make_sum(y1, y2):
         if is_number(y1) and is_number(y2):
-            return y1 + y2, True
+            return y1 + y2
         elif y1 == 0:
-            return y2, True
+            return y2
         elif y2 == 0:
-            return y1, True
+            return y1
         else:
-            return {'y1': y1, 'y2': y2}, False
+            return add_type('sum', {'y1': y1, 'y2': y2})
 
     def stringify_expr_sum(y):
         y1 = get_addend1(y)
@@ -89,26 +94,25 @@ def install_sum():
 def install_product():
     assert 'sum' in table
 
-    # here y is y['data']
     def get_multiplicand1(y):
-        return y['y1']
+        return extract_data(y)['y1']
 
     def get_multiplicand2(y):
-        return y['y2']
+        return extract_data(y)['y2']
 
     def make_product(y1, y2):
         if is_number(y1) and is_number(y2):
-            return y1 * y2, True
+            return y1 * y2
         elif y1 == 0:
-            return 0, True
+            return 0
         elif y1 == 1:
-            return y2, True
+            return y2
         elif y2 == 0:
-            return 0, True
+            return 0
         elif y2 == 1:
-            return y1, True
+            return y1
         else:
-            return {'y1': y1, 'y2': y2}, False
+            return add_type('product', {'y1': y1, 'y2': y2})
 
     def stringify_expr_product(y):
         y1 = get_multiplicand1(y)
