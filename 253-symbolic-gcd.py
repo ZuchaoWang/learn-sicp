@@ -55,6 +55,7 @@ def stringify_term(term):
 
 
 def reduce_terms(terms):
+    # just remove 0-coeff terms
     return [t for t in terms if coeff_term(t)]
 
 
@@ -93,6 +94,7 @@ def scale_terms(terms, x):
 
 
 def inv_scale_terms(terms, x):
+    # divided by scale x
     terms_res = [make_term(power_term(t), coeff_term(t)//x) for t in terms]
     return reduce_terms(terms_res)
 
@@ -139,6 +141,7 @@ def div_terms(terms1, terms2):
 
 
 def pseudo_div_terms(terms1, terms2):
+    # pre-multiply terms1 to avoid fractional result
     assert len(terms1) and len(terms2)
     p1 = power_term(terms1[0])
     c1 = coeff_term(terms1[0])
@@ -153,14 +156,15 @@ def pseudo_div_terms(terms1, terms2):
 
 
 def prime_terms(terms):
-    # make all prime to each other
     if len(terms) == 0:
         return terms
     else:
         factor = 0
+        # make all prime to each other
         for i in range(0, len(terms)):
             factor = gcd_int(factor, abs(coeff_term(terms[i])))
         assert factor > 0
+        # ensures first coeff is positive
         if coeff_term(terms[0]) < 0:
             factor = -factor
         return inv_scale_terms(terms, factor)
@@ -171,12 +175,15 @@ def gcd_terms(terms1, terms2):
         return terms2
     if len(terms2) == 0:
         return terms1
+    # ensure terms1 has higher power
     p1 = power_term(terms1[0])
     p2 = power_term(terms2[0])
     if p1 < p2:
         (terms1, terms2) = (terms2, terms1)
+    # constantly call prime to prevent coeff becomes too big
     terms1 = prime_terms(terms1)
     terms2 = prime_terms(terms2)
+    # iteration begins
     while len(terms2) > 0:
         _, terms_rem = pseudo_div_terms(terms1, terms2)
         terms_rem = prime_terms(terms_rem)
@@ -200,7 +207,7 @@ def stringify_terms(terms):
 
 
 # polynomial
-
+# just a wrapper of terms
 
 def make_polynomial_inner(terms):
     return terms
@@ -247,18 +254,24 @@ def test():
     test_one_int(0, 3, 3)
     test_one_int(40, 96, 8)
     test_one_int(96, 40, 8)
-    test_one_polynomial(make_polynomial((1, 1), (0, 1)),
-                        make_polynomial((1, 1), (0, -1)), '1')
-    test_one_polynomial(make_polynomial((1, 1), (0, 1)),
-                        make_polynomial((1, 1), (0, 1)), 'x+1')
-    test_one_polynomial(make_polynomial((2, 1), (0, -1)),
-                        make_polynomial((1, 1), (0, 1)), 'x+1')
-    test_one_polynomial(make_polynomial((2, 1), (0, 1)),
-                        make_polynomial((1, 1), (0, 1)), '1')
-    test_one_polynomial(make_polynomial((2, 2), (1, 3), (0, 1)),
-                        make_polynomial((3, 3), (2, 3), (1, 1), (0, 1)), 'x+1')
-    test_one_polynomial(make_polynomial((2, -2), (1, -3), (0, -1)),
-                        make_polynomial((3, 3), (2, 3), (1, 1), (0, 1)), 'x+1')
+    test_one_polynomial(make_polynomial((1, 1), (0, 1)),  # x+1
+                        make_polynomial((1, 1), (0, -1)), # x-1
+                        '1')
+    test_one_polynomial(make_polynomial((1, 1), (0, 1)),  # x+1
+                        make_polynomial((1, 1), (0, 1)),  # x+1
+                        'x+1')
+    test_one_polynomial(make_polynomial((2, 1), (0, -1)), # x^2-1
+                        make_polynomial((1, 1), (0, 1)),  # x+1
+                        'x+1')
+    test_one_polynomial(make_polynomial((2, 1), (0, 1)),  # x^2+1
+                        make_polynomial((1, 1), (0, 1)),  # x+1
+                        '1')
+    test_one_polynomial(make_polynomial((2, 2), (1, 3), (0, 1)),         # 2*x^2+3*x+1
+                        make_polynomial((3, 3), (2, 3), (1, 1), (0, 1)), # 3*x^3+3*x^2+x+1
+                        'x+1')
+    test_one_polynomial(make_polynomial((2, -2), (1, -3), (0, -1)),      # -2*x^2-3*x-1
+                        make_polynomial((3, 3), (2, 3), (1, 1), (0, 1)), # 3*x^3+3*x^2+x+1
+                        'x+1')
 
 
 if __name__ == '__main__':
