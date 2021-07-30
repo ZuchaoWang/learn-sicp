@@ -80,7 +80,7 @@ def make_primes_sieve():
     return primes
 
 
-def make_prime_check():
+def make_primes_check():
     integers = Stream.make_integers()
     integers_from_three = integers.next().next().next()
     primes = Stream(2, lambda: integers_from_three.filter(check_prime))
@@ -124,7 +124,7 @@ def test_one(ss: Stream, sc: Stream, n):
 def test():
     test_basic()
     ss = make_primes_sieve()
-    sc = make_prime_check()
+    sc = make_primes_check()
     test_one(ss, sc, 1)
     test_one(ss, sc, 10)
     test_one(ss, sc, 100)
