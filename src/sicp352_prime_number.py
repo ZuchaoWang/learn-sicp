@@ -47,9 +47,6 @@ class Stream:
                 return Stream(head, gen_next)
             s = rest
 
-    def map(self, proc: Callable) -> "Stream":
-        return Stream.map(proc, self)
-
     def scale(self, scl) -> "Stream":
         return Stream.map(lambda v: v*scl, self)
 
