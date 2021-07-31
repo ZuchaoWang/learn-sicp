@@ -1,4 +1,6 @@
 # exercise 3.59-62
+# we represent power series as infinite stream
+# and define operations on power series
 
 from typing import Callable, Tuple
 import sicp352_prime_number
@@ -49,6 +51,7 @@ def ps_stringify(s: Stream, n: int) -> str:
 
 
 def ps_mult(s1: Stream, s2: Stream) -> Stream:
+    # pattern: (k+1)-th item does not depend on previous items
     def calc_mult(n: int) -> Stream:
         coeffs1 = s1.topn_values(n+1)
         coeffs2 = s2.topn_values(n+1)
@@ -180,16 +183,15 @@ def test():
     ps_one = Stream.add(ps_square(ps_sin), ps_square(ps_cos))
     ps_tan = ps_div(ps_sin, ps_cos)
     # test prepare
-    factorial = make_factorial()
-    bernoulli = make_bernoulli()
-    exponential2 = make_exponential(2)
+    fact = make_factorial()
+    bern = make_bernoulli()
+    exp2 = make_exponential(2)
     n_coeff = 10
     # test
-    test_one("sin", ps_sin, n_coeff, lambda i: coeff_sin(i, factorial))
-    test_one("cos", ps_cos, n_coeff, lambda i: coeff_cos(i, factorial))
+    test_one("sin", ps_sin, n_coeff, lambda i: coeff_sin(i, fact))
+    test_one("cos", ps_cos, n_coeff, lambda i: coeff_cos(i, fact))
     test_one("one", ps_one, n_coeff, lambda i: coeff_one(i))
-    test_one("tan", ps_tan, n_coeff, lambda i: coeff_tan(
-        i, factorial, bernoulli, exponential2))
+    test_one("tan", ps_tan, n_coeff, lambda i: coeff_tan(i, fact, bern, exp2))
 
 
 if __name__ == '__main__':
