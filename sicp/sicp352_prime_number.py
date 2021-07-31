@@ -23,11 +23,19 @@ class Stream:
             self.next_cached_value = self.gen_next()
         return self.next_cached_value
 
-    def nth_value(self, n):
+    def nth_value(self, n: int):
         s = self
-        for i in range(n):
+        for _ in range(n):
             s = s.next()
         return s.value()
+
+    def topn_values(self, n: int):
+        values = []
+        s = self
+        for _ in range(n):
+            values.append(s.value())
+            s = s.next()
+        return values
 
     def filter(self, pred: Callable[..., bool]) -> "Stream":
         s = self
@@ -42,6 +50,12 @@ class Stream:
     def map(self, proc: Callable) -> "Stream":
         return Stream.map(proc, self)
 
+    def scale(self, scl) -> "Stream":
+        return Stream.map(lambda v: v*scl, self)
+
+    def reciprocal(self) -> "Stream":
+        return Stream.map(lambda v: 1/v, self)
+
     @staticmethod
     def map(proc: Callable, *sList: "Stream") -> "Stream":
         head = proc(*[s.value() for s in sList])
@@ -55,6 +69,12 @@ class Stream:
         def adder(a, b):
             return a+b
         return Stream.map(adder, s1, s2)
+
+    @staticmethod
+    def mult(s1: "Stream", s2: "Stream") -> "Stream":
+        def multiplier(a, b):
+            return a*b
+        return Stream.map(multiplier, s1, s2)
 
     @staticmethod
     def make_ones():
