@@ -20,12 +20,14 @@ def partial_sum(s: Stream):
 
 
 def make_pi_raw():
-    '''will be row 0 of table'''
+    '''partial sum of 1 - 1/3 + 1/5 - 1/7 + ...
+    will be row 0 of table'''
     pi_summands = make_pi_summands()
     return partial_sum(pi_summands).scale(4)
 
 
 def euler_transform(s: Stream):
+    '''only applicable to alternative series'''
     v0 = s.value()
     v1 = s.next().value()
     v2 = s.next().next().value()
@@ -37,6 +39,7 @@ def euler_transform(s: Stream):
 
 
 def make_pi_acc_table(s: Stream):
+    '''each item is itself a stream of estimation'''
     return Stream(s, lambda: make_pi_acc_table(euler_transform(s)))
 
 
@@ -70,10 +73,12 @@ def test():
     res.append(pi_acc1.topn_values(n))
     res.append(pi_acc2.topn_values(n))
     res.append(pi_acc3.topn_values(n))
+    # print
     print('estimation of pi = %.14f:' % math.pi)
     print(', '.join(['raw0'+' '*12, 'acc1'+' '*12, 'acc2'+' '*12, 'acc3'+' '*12]))
     for i in range(n):
         print(', '.join(['%.14f' % res[j][i] for j in range(len(res))]))
+    # test
     for j in range(len(res)-1):
         assert abs(res[j][-1]-math.pi) >= abs(res[j+1][-1]-math.pi)
 
