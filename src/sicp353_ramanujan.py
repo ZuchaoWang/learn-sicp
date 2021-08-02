@@ -1,4 +1,5 @@
 # excercise 3.68, 3.70, 3.71
+# the goal is to find integers that have at least two ways to be represented as sum of cubes
 # I feel stream is really good at ordering and counting infinite sequence
 
 from typing import Callable, Tuple
