@@ -29,6 +29,18 @@ def make_ordered_pairs(s1: Stream, s2: Stream, cmp: Callable[..., int]) -> Strea
     return Stream(head_pair, lambda: interleave(make_upper_pairs(), make_bottom_right_pairs(), cmp))
 
 
+def groupby(s: Stream, cmp: Callable[..., int]) -> Stream:
+    '''each item in the input is a value
+    each item in the output stream is a list of values with the same weight
+    this requires the input stream to be already ordered by weight'''
+    values = [s.value()]
+    s = s.next()
+    while cmp(s.value(), values[-1]) == 0:
+        values.append(s.value())
+        s = s.next()
+    return Stream(values, lambda: groupby(s, cmp))
+
+
 def calc_weight(p: Tuple[int, int]) -> int:
     '''must be increasing w.r.t. to x and y'''
     x, y = p
@@ -43,18 +55,6 @@ def cmp_weight(p1: Tuple[int, int], p2: Tuple[int, int]) -> int:
 def stringify_pair(p: Tuple[int, int]) -> str:
     x, y = p
     return '%d^3+%d^3' % (x, y)
-
-
-def groupby(s: Stream, cmp: Callable[..., int]) -> Stream:
-    '''each item in the input is a value
-    each item in the output stream is a list of values with the same weight
-    this requires the input stream to be already ordered by weight'''
-    values = [s.value()]
-    s = s.next()
-    while cmp(s.value(), values[-1]) == 0:
-        values.append(s.value())
-        s = s.next()
-    return Stream(values, lambda: groupby(s, cmp))
 
 
 def test():
