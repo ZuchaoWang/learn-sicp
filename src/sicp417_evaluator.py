@@ -9,6 +9,7 @@
 # finally evaluator executes the functions
 
 import sys
+import inspect
 from typing import Callable, Dict, List, Optional
 
 
@@ -175,6 +176,8 @@ class ExprPrinter:
             panic('expr printer: unknown type = %s' % expr.typ)
 
 
+# TODO: need a pair data structure, scheme list is build from pairs
+
 class LinkedList:
     def __init__(self, expr: Expression, next: Optional["LinkedList"] = None):
         self.expr = expr
@@ -272,17 +275,56 @@ class Parser:
 # we assume operator cannot be a procedure that evaluates to symbol
 # see 4.1.7
 
+# TODO: finish environment
+
+class Environment:
+    def __init__(self, bindings: Dict[str, Expression] = {}, enclosing: Optional["Environment"] = None):
+        self._bindings = bindings
+        self._enclosing = enclosing
+
+    def define(self, name: str, expr: Expression):
+        pass
+
+    def set(self, name: str, expr: Expression):
+        pass
+
+    def lookup(self, name: str):
+        pass
+
+    def _find_env(self, name: str):
+        env = self
+        while env is not None:
+            if name in env._bindings:
+                return env
+            else:
+                env = env._enclosing
+        return None
+
+    def define_primitive(self, name: str, py_func: Callable):
+        arity = len(inspect.getfullargspec(py_func).args)
+        primitive = Primitive(PRIMITIVE, arity, py_func)
+        self._bindings[name] = primitive
+        return primitive
+
+    def extend(self, parameter: List[str], arguments: List[Expression]):
+        return Environment(dict(zip(parameter, arguments)), self)
+
+
+AnalyzeRetType = Callable[[Environment], Expression]
+AnalyzeType = Callable[[Optional[Expression]], AnalyzeRetType]
+AnalyzeConfigType = Callable[[Environment, AnalyzeType], AnalyzeRetType]
+
 
 class Analyzer:
-    def __init__(self, special_forms: Dict[str, Callable], procedure: Callable, symbol: Callable):
+    def __init__(self, special_forms: Dict[str, AnalyzeConfigType], application: AnalyzeConfigType, symbol: AnalyzeConfigType):
         self._special_forms = special_forms
-        self._procedure = procedure
+        self._application = application
         self._symbol = symbol
 
-    def analyze(self, expr: Optional[Expression]):
+    def analyze(self, expr: Optional[Expression]) -> AnalyzeRetType:
         if expr is not None:
             if expr.typ == NUMBER or expr.typ == STRING:
-                return lambda env: expr
+                return lambda _: expr
             elif expr.typ == SYMBOL:
                 return self.analyze_symbol(expr)
             else:  # must be list
@@ -305,41 +347,51 @@ class Analyzer:
                 f = self._special_forms.get(hexpr.value, None)
                 if f is not None:
                     return f(expr, self.analyze)
-            return self._procedure(expr, self.analyze)
+            return self._application(expr, self.analyze)
+
+
+PROCEDURE = 'PROCEDURE'
+PRIMITIVE = 'PRIMITIVE'
 
 
 class Procedure:
-    def __init__(self, parameters: List[str], body: Callable):
+    def __init__(self, parameters: List[str], body: Callable[[Environment], Expression]):
         self.parameters = parameters
         self.body = body
 
 
-def analyze_symbol(expr: Expression, _analyze: Callable):
+class Primitive:
+    def __init__(self, arity: int, body: Callable[..., Expression]):
+        self.arity = arity
+        self.body = body
+
+
+def analyze_symbol(expr: Expression, _analyze: AnalyzeType) -> AnalyzeRetType:
     '''lookup variable'''
     name = expr.value
     return lambda env: env.lookup(name)
 
 
-def analyze_quote(expr: Expression, _analyze: Callable):
+def analyze_quote(expr: Expression, _analyze: AnalyzeType) -> AnalyzeRetType:
     head: LinkedList = expr.value
     if head.length() == 2:
         quoted = head.next.expr
-        return lambda env: quoted
+        return lambda _: quoted
     else:
         panic('analyze_quote: list length should be 2')
 
 
-def analyze_set(expr: Expression, analyze: Callable):
+def analyze_set(expr: Expression, analyze: AnalyzeType) -> AnalyzeRetType:
     head: LinkedList = expr.value
     name: str = head.expr.value
     if head.length() == 2:
-        get_value = analyze(head.next)
-        return lambda env: env.set(name, get_value())
+        get_expr = analyze(head.next)
+        return lambda env: env.set(name, get_expr())
     else:
         panic('analyze_set: list length should be 2')
     
 
-def analyze_define(expr: Expression, analyze: Callable):
+def analyze_define(expr: Expression, analyze: AnalyzeType) -> AnalyzeRetType:
     head: LinkedList = expr.value
     name: str = head.expr.value
     hl = head.length()
@@ -359,11 +411,55 @@ def analyze_define(expr: Expression, analyze: Callable):
             parameters.append(para_exprs.expr.value)
             para_exprs = para_exprs.next
         body = analyze(head.next.next.expr)
-        proc = Procedure(parameters, body)
+        proc = Expression(PROCEDURE, Procedure(parameters, body))
         return lambda env: env.define(name, proc)
     else:
         panic('analyze_define: list length should be 2')
-    
+
+
+def analyze_application(expr: Expression, analyze: AnalyzeType) -> AnalyzeRetType:
+    head: LinkedList = expr.value        
+    get_operator = analyze(head.expr)
+    get_operands: List[AnalyzeRetType] = []
+    op_expr = head.next
+    while op_expr is not None:
+        get_operands.append(analyze(op_expr))
+        op_expr = op_expr.next
+    def _analyze_application(env: Environment):
+        operator = get_operator(env)
+        operands = [get_op(env) for get_op in get_operands]
+        if operator.typ == PRIMITIVE:
+            primitive: Primitive = operator.value
+            if len(operands) != primitive.arity:
+                panic('analyze_application: primitive incorrect arity %d, should be %d' % (len(operands), primitive.arity))
+            return primitive.body(*operands)
+        elif operator.typ == PROCEDURE:
+            procedure: Procedure = operator.value
+            if len(operands) != len(procedure.parameters):
+                panic('analyze_application: procedure incorrect arity %d, should be %d' % (len(operands), len(procedure.parameters)))
+            new_env = env.extend(procedure.parameters, operands)
+            return procedure.body(new_env)
+        else:
+            panic('analyze_application: expression of type %s cannot be used as operator' % operator.typ)
+    return _analyze_application
+
+
+def prim_op_number2(py_func: Callable[[float, float], float], x: Expression, y: Expression) -> Expression:
+    if x.typ != NUMBER or y.typ != NUMBER:
+        panic('%s: both operator should be number, now %s and %s' % (py_func.__name__, x.typ, y.typ))
+    xval: float = x.value
+    yval: float = y.value
+    res = py_func(xval, yval)
+    return Expression(NUMBER, res)
+
+
+def prim_op_add(x: Expression, y: Expression) -> Expression:
+    def _prim_op_add(a: float, b: float): return a+b
+    return prim_op_number2(_prim_op_add, x, y)
+
+
+# TODO: register display, equality, truthy
+
 
 def test_one(source: str, token_str_expect: Optional[str], expr_str_expect: Optional[str]):
     # source
