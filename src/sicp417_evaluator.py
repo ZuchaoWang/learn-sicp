@@ -11,7 +11,7 @@
 import sys
 import inspect
 import enum
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, ClassVar, Dict, List, Optional, Set, Tuple, Type, Union
 
 
 def panic(msg: str):
@@ -34,27 +34,13 @@ def stringify_float(x: float):
 
 
 @enum.unique
-class SchEnum(enum.Enum):
+class TokenTag(enum.Enum):
     LEFT_PAREN = enum.auto()
     RIGHT_PAREN = enum.auto()
     QUOTE = enum.auto()
     SYMBOL = enum.auto()
     STRING = enum.auto()
     NUMBER = enum.auto()
-    NIL = enum.auto()
-    PAIR = enum.auto()
-    PROCEDURE = enum.auto()
-    PRIMITIVE = enum.auto()
-
-
-TokenTag = Union[
-    SchEnum.LEFT_PAREN,
-    SchEnum.RIGHT_PAREN,
-    SchEnum.QUOTE,
-    SchEnum.SYMBOL,
-    SchEnum.STRING,
-    SchEnum.NUMBER,
-]
 
 
 class Token:
@@ -67,12 +53,12 @@ class Token:
 class TokenPrinter:
     def __init__(self):
         self._rules: Dict[TokenTag, Callable[[Token], str]] = {
-            SchEnum.LEFT_PAREN: self._stringify_other,
-            SchEnum.RIGHT_PAREN: self._stringify_other,
-            SchEnum.QUOTE: self._stringify_other,
-            SchEnum.SYMBOL: self._stringify_string,
-            SchEnum.STRING: self._stringify_string,
-            SchEnum.NUMBER: self._stringify_number,
+            TokenTag.LEFT_PAREN: self._stringify_other,
+            TokenTag.RIGHT_PAREN: self._stringify_other,
+            TokenTag.QUOTE: self._stringify_other,
+            TokenTag.SYMBOL: self._stringify_string,
+            TokenTag.STRING: self._stringify_string,
+            TokenTag.NUMBER: self._stringify_number,
         }
 
     def stringify(self, tk: Token):
@@ -90,7 +76,15 @@ class TokenPrinter:
 
 
 class Scanner:
-    _invalid_nonstring_chars = set(''.split('[]{}\"\',`;#|\\'))
+    # class vars
+    _invalid_nonstring_chars: ClassVar[Set[str]] = set(
+        ''.split('[]{}\"\',`;#|\\'))
+
+    # instance vars
+    _source: str
+    _start: int
+    _current: int
+    _tokens: List[Token]
 
     def __init__(self):
         self._restart('')
@@ -111,9 +105,9 @@ class Scanner:
     def _scan_one_token(self):
         c = self._advance()
         if c == '(':
-            self._add_token(SchEnum.LEFT_PAREN)
+            self._add_token(TokenTag.LEFT_PAREN)
         elif c == ')':
-            self._add_token(SchEnum.RIGHT_PAREN)
+            self._add_token(TokenTag.RIGHT_PAREN)
         elif c == '\'':
             self._scan_quote()
         elif c == '"':
@@ -142,7 +136,7 @@ class Scanner:
         elif self._peek().isspace():
             panic('scanner: quote should not be followed by space')
         else:
-            self._add_token(SchEnum.QUOTE)
+            self._add_token(TokenTag.QUOTE)
 
     def _scan_string(self):
         while not self._is_at_end() and self._peek() != '"':
@@ -157,7 +151,7 @@ class Scanner:
 
         # trim the surrounding quotes
         lexemem = self._source[self._start+1:self._current-1]
-        self._add_token(SchEnum.STRING, lexemem)
+        self._add_token(TokenTag.STRING, lexemem)
 
     def _scan_nonstring(self):
         while not self._is_at_end() and not Scanner._can_terminate_nonstring(self._peek()):
@@ -168,41 +162,23 @@ class Scanner:
 
         try:
             lexemem = float(self._source[self._start:self._current])
-            self._add_token(SchEnum.NUMBER, lexemem)
+            self._add_token(TokenTag.NUMBER, lexemem)
         except:
             lexemem = self._source[self._start:self._current]
             if lexemem[0].isnumeric():
                 panic('scanner: symbol should not start with number: %s' % lexemem)
-            self._add_token(SchEnum.SYMBOL, lexemem)
+            self._add_token(TokenTag.SYMBOL, lexemem)
 
     @staticmethod
     def _can_terminate_nonstring(c: str):
         return c.isspace() or c == '(' or c == ')'
 
-
-# scheme parser: tokens -> scheme lists
-# empty list is represented as special nil expression
-# non-empty list is represented as pairs
-# ref: https://craftinginterpreters.com/parsing-expressions.html
-
-ExprTag = Union[
-    SchEnum.SYMBOL,
-    SchEnum.STRING,
-    SchEnum.NUMBER,
-    SchEnum.NIL,
-    SchEnum.PAIR,
-    SchEnum.PROCEDURE,
-    SchEnum.PRIMITIVE,
-]
-
+# expression and environment
 
 class Expression:
-    def __init__(self, tag: ExprTag, value):
-        self.tag = tag
-        self.value = value
+    pass
 
 # TODO: finish environment
-
 
 class Environment:
     def __init__(self, bindings: Dict[str, Expression] = {}, enclosing: Optional["Environment"] = None):
@@ -224,33 +200,60 @@ class Environment:
             if name in env._bindings:
                 return env
             else:
-                env = env._enclosing
+                env = env._enclosing  # type: ignore
         return None
 
     def define_primitive(self, name: str, py_func: Callable):
         arity = len(inspect.getfullargspec(py_func).args)
-        primitive = Primitive(name, arity, py_func)
+        primitive = PrimExpr(name, arity, py_func)
         self._bindings[name] = primitive
         return primitive
 
     def extend(self, parameter: List[str], arguments: List[Expression]):
         return Environment(dict(zip(parameter, arguments)), self)
 
+# define different types of expressions as difference classes for better type checking
+# if we use tag to differentiate different types, typing does not allow specify tag as type
+#
+# we do not differentiate between object and experssion
+# because they are so similar in Scheme 
+#
+# empty list is represented as special nil expression
+# non-empty list is represented as pairs
 
-class Pair:
+class SymbolExpr(Expression):
+    def __init__(self, literal: str):
+        self.literal = literal
+
+
+class StringExpr(Expression):
+    def __init__(self, literal: str):
+        self.literal = literal
+
+
+class NumberExpr(Expression):
+    def __init__(self, literal: float):
+        self.literal = literal
+
+
+class NilExpr(Expression):
+    pass
+
+
+class PairExpr(Expression):
     def __init__(self, left: Expression, right: Expression):
         self.left = left
         self.right = right
 
 
-class Procedure:
+class ProcExpr(Expression):
     def __init__(self, name: str, parameters: List[str], body: Callable[[Environment], Expression]):
         self.name = name
         self.parameters = parameters
         self.body = body
 
 
-class Primitive:
+class PrimExpr(Expression):
     def __init__(self, name: str, arity: int, body: Callable[..., Expression]):
         self.name = name
         self.arity = arity
@@ -258,84 +261,75 @@ class Primitive:
 
 
 class ExprPrinter:
+
+    # instance vars
+    _rules: Dict[Type, Callable[[Expression], str]]
+
     def __init__(self):
-        self._rules: Dict[TokenTag, Callable[[Expression], str]] = {
-            SchEnum.SYMBOL: ExprPrinter._stringify_symbol,
-            SchEnum.STRING: ExprPrinter._stringify_string,
-            SchEnum.NUMBER: ExprPrinter._stringify_number,
-            SchEnum.NIL: ExprPrinter._stringify_nil,
-            SchEnum.PAIR: ExprPrinter._stringify_pair,
-            SchEnum.PROCEDURE: ExprPrinter._stringify_procedure,
-            SchEnum.PRIMITIVE: ExprPrinter._stringify_primitive,
+        self._rules = {
+            SymbolExpr: ExprPrinter._stringify_symbol,
+            StringExpr: ExprPrinter._stringify_string,
+            NumberExpr: ExprPrinter._stringify_number,
+            NilExpr: ExprPrinter._stringify_nil,
+            PairExpr: ExprPrinter._stringify_pair,
+            ProcExpr: ExprPrinter._stringify_procedure,
+            PrimExpr: ExprPrinter._stringify_primitive,
         }
 
     def stringify(self, expr: Expression):
-        f = self._rules[expr.tag]
+        f = self._rules[type(expr)]
         return f(expr)
 
-    def _stringify_symbol(self, expr: Expression):
-        return expr.value
+    def _stringify_symbol(self, expr: SymbolExpr):
+        return expr.literal
 
-    def _stringify_number(self, expr: Expression):
-        return stringify_float(expr.value)
+    def _stringify_string(self, expr: StringExpr):
+        return '"%s"' % expr.literal
 
-    def _stringify_string(self, expr: Expression):
-        return '"%s"' % expr.value
+    def _stringify_number(self, expr: NumberExpr):
+        return stringify_float(expr.literal)
 
-    def _stringify_nil(self, expr: Expression):
+    def _stringify_nil(self, expr: NilExpr):
         return '()'
 
-    def _stringify_pair(self, expr: Expression):
-        p: Pair = expr.value
-        left_str = self.stringify(p.left)
-        right_str = self.stringify(p.right)
-        if p.right.tag == SchEnum.NIL:
+    def _stringify_pair(self, expr: PairExpr):
+        left_str = self.stringify(expr.left)
+        right_str = self.stringify(expr.right)
+        if isinstance(expr.right, NilExpr):
             return '(%s)' % left_str
-        elif p.right.tag == SchEnum.PAIR:
+        elif isinstance(expr.right, PairExpr):
             # right_str strip off paranthesis
             return '(%s %s)' % (left_str, right_str[1:-1])
         else:
             return '(%s . %s)' % (left_str, right_str)
 
-    def _stringify_procedure(self, expr: Expression):
-        p: Procedure = expr.value
-        return '[procedure %s]' % p.name
+    def _stringify_procedure(self, expr: ProcExpr):
+        return '[procedure %s]' % expr.name
 
-    def _stringify_primitive(self, expr: Expression):
-        p: Primitive = expr.value
-        return '[primitive %s]' % p.name
-
-# TODO: need a pair data structure, scheme list is build from pairs
+    def _stringify_primitive(self, expr: PrimExpr):
+        return '[primitive %s]' % expr.name
 
 
 class ExprList:
 
     @staticmethod
     def make_list(expr_list: List[Expression]):
-        head = Expression(SchEnum.NIL, None)
+        head: Expression = NilExpr()
         for i in range(len(expr_list)-1, -1, -1):
-            head = Expression(SchEnum.PAIR, Pair(expr_list[i], head))
+            head = PairExpr(expr_list[i], head)
         return head
-
-    @staticmethod
-    def value(expr: Expression):
-        p: Pair = expr.value
-        return p.left
-
-    @staticmethod
-    def next(expr: Expression):
-        p: Pair = expr.value
-        return p.right
 
     @staticmethod
     def length(expr: Expression):
         count = 0
         head = expr
-        while head.tag == SchEnum.PAIR:
+        while isinstance(head, PairExpr):
             count += 1
-            head = ExprList.next(head)
+            head = head.right
         return count
 
+# scheme parser: tokens -> scheme lists
+# ref: https://craftinginterpreters.com/parsing-expressions.html
 
 class Parser:
     '''
@@ -344,14 +338,19 @@ class Parser:
     list -> LEFT_PAREN ( expression )* RIGHT_PAREN;
     '''
 
+    _rules: Dict[TokenTag, Callable[[Token], Expression]]
+    _tokens: List[Token]
+    _current: int
+    _token_printer: TokenPrinter
+
     def __init__(self):
-        self.lookup_table = {
-            SchEnum.SYMBOL: self._parse_simple,
-            SchEnum.NUMBER: self._parse_simple,
-            SchEnum.STRING: self._parse_simple,
-            SchEnum.QUOTE: self._parse_quote,
-            SchEnum.LEFT_PAREN: self._parse_left_paren,
-            SchEnum.RIGHT_PAREN: self._parse_right_paren
+        self._rules = {
+            TokenTag.SYMBOL: self._parse_symbol,
+            TokenTag.NUMBER: self._parse_number,
+            TokenTag.STRING: self._parse_string,
+            TokenTag.QUOTE: self._parse_quote,
+            TokenTag.LEFT_PAREN: self._parse_left_paren,
+            TokenTag.RIGHT_PAREN: self._parse_right_paren
         }
         self._restart([])
         self._token_printer = TokenPrinter()
@@ -374,25 +373,31 @@ class Parser:
         if self._is_at_end():
             panic('parser: recursive parse failed')
         token = self._advance()
-        return self.lookup_table[token.tag](token)
+        return self._rules[token.tag](token)
 
-    def _parse_simple(self, token: Token):
-        return Expression(token.tag, token.literal)
+    def _parse_symbol(self, token: Token):
+        return SymbolExpr(token.literal)
+
+    def _parse_string(self, token: Token):
+        return StringExpr(token.literal)
+
+    def _parse_number(self, token: Token):
+        return NumberExpr(token.literal)
 
     def _parse_quote(self, _token: Token):
-        expr_list = []
-        expr_list.append(Expression(SYMBOL, 'quote'))
+        expr_list: List[Expression] = []
+        expr_list.append(SymbolExpr('quote'))
         expr_list.append(self._parse_recursive())
-        return Expression(LIST, LinkedList.from_list(expr_list))
+        return ExprList.make_list(expr_list)
 
     def _parse_left_paren(self, _token: Token):
-        expr_list = []
-        while not self._is_at_end() and self._peek().tag != RIGHT_PAREN:
+        expr_list: List[Expression] = []
+        while not self._is_at_end() and self._peek().tag != TokenTag.RIGHT_PAREN:
             expr_list.append(self._parse_recursive())
-        if self._is_at_end() or self._peek().tag != RIGHT_PAREN:
+        if self._is_at_end() or self._peek().tag != TokenTag.RIGHT_PAREN:
             panic('parser: list missing right parenthesis')
         self._advance()  # consume right parenthesis
-        return Expression(LIST, LinkedList.from_list(expr_list))
+        return ExprList.make_list(expr_list)
 
     def _parse_right_paren(self, _token: Token):
         panic('parser: unmatched right parenthesis')
@@ -572,7 +577,8 @@ def test_one(source: str, token_str_expect: Optional[str], expr_str_expect: Opti
     # parse
     parser = Parser()
     expr = parser.parse(tokens)
-    expr_str = ExprPrinter.stringify(expr) if expr else ''
+    expr_printer = ExprPrinter()
+    expr_str = expr_printer.stringify(expr) if expr else ''
     print('expression: %s' % expr_str)
     if expr_str_expect is not None:
         assert expr_str == expr_str_expect
