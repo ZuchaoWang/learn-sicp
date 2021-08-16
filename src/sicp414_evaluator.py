@@ -69,15 +69,17 @@ class Token:
 
 
 class TokenStringifier:
+    _rules: Dict[TokenTag, Callable[[Token], str]]
+
     def __init__(self):
-        self._rules: Dict[TokenTag, Callable[[Token], str]] = {
+        self._rules = {
             TokenTag.LEFT_PAREN: self._stringify_other,
             TokenTag.RIGHT_PAREN: self._stringify_other,
             TokenTag.QUOTE: self._stringify_other,
             TokenTag.SYMBOL: self._stringify_string,
             TokenTag.STRING: self._stringify_string,
             TokenTag.NUMBER: self._stringify_number,
-            TokenTag.BOOLEAN: self._stringify_string,
+            TokenTag.BOOLEAN: self._stringify_boolean,
         }
 
     def stringify(self, token: Token):
@@ -85,13 +87,16 @@ class TokenStringifier:
         return f(token)
 
     def _stringify_number(self, token: Token):
-        return '%s:%s' % (token.tag, stringify_float(token.literal))
+        return '%s:%s' % (token.tag.name, stringify_float(token.literal))
 
     def _stringify_string(self, token: Token):
-        return '%s:%s' % (token.tag, token.literal)
+        return '%s:%s' % (token.tag.name, token.literal)
+
+    def _stringify_boolean(self, token: Token):
+        return '%s:%s' % (token.tag.name, '#t' if token.literal else '#f')
 
     def _stringify_other(self, token: Token):
-        return token.tag
+        return token.tag.name
 
 
 token_stringifier = TokenStringifier()
@@ -246,9 +251,6 @@ class EnvironmentError(Exception):
     def __init__(self, message: str):
         self.message = message
 
-    def __str__(self):
-        return 'environment error: %s' % self.message
-
 
 class Environment:
     def __init__(self, bindings: Dict[str, Expression] = {}, enclosing: Optional["Environment"] = None):
@@ -378,15 +380,15 @@ class ExprStringifier:
 
     def __init__(self):
         self._rules = {
-            SymbolExpr: ExprStringifier._stringify_symbol,
-            StringExpr: ExprStringifier._stringify_string,
-            NumberExpr: ExprStringifier._stringify_number,
-            BooleanExpr: ExprStringifier._stringify_boolean,
-            NilExpr: ExprStringifier._stringify_nil,
-            UndefExpr: ExprStringifier._stringify_undef,
-            PairExpr: ExprStringifier._stringify_pair,
-            ProcExpr: ExprStringifier._stringify_procedure,
-            PrimExpr: ExprStringifier._stringify_primitive,
+            SymbolExpr: self._stringify_symbol,
+            StringExpr: self._stringify_string,
+            NumberExpr: self._stringify_number,
+            BooleanExpr: self._stringify_boolean,
+            NilExpr: self._stringify_nil,
+            UndefExpr: self._stringify_undef,
+            PairExpr: self._stringify_pair,
+            ProcExpr: self._stringify_procedure,
+            PrimExpr: self._stringify_primitive,
         }
 
     def stringify(self, expr: Expression):
@@ -442,15 +444,15 @@ class ExprEqualityChecker:
 
     def __init__(self):
         self._rules = {
-            SymbolExpr: ExprEqualityChecker._check_literal,
-            StringExpr: ExprEqualityChecker._check_literal,
-            NumberExpr: ExprEqualityChecker._check_literal,
-            BooleanExpr: ExprEqualityChecker._check_literal,
-            NilExpr: ExprEqualityChecker._check_true,
-            UndefExpr: ExprEqualityChecker._check_true,
-            PairExpr: ExprEqualityChecker._check_object,
-            ProcExpr: ExprEqualityChecker._check_object,
-            PrimExpr: ExprEqualityChecker._check_object,
+            SymbolExpr: self._check_literal,
+            StringExpr: self._check_literal,
+            NumberExpr: self._check_literal,
+            BooleanExpr: self._check_literal,
+            NilExpr: self._check_true,
+            UndefExpr: self._check_true,
+            PairExpr: self._check_object,
+            ProcExpr: self._check_object,
+            PrimExpr: self._check_object,
         }
 
     def check(self, x: Expression, y: Expression):
@@ -531,6 +533,7 @@ class Parser:
             TokenTag.SYMBOL: self._parse_symbol,
             TokenTag.NUMBER: self._parse_number,
             TokenTag.STRING: self._parse_string,
+            TokenTag.BOOLEAN: self._parse_boolean,
             TokenTag.QUOTE: self._parse_quote,
             TokenTag.LEFT_PAREN: self._parse_left_paren,
             TokenTag.RIGHT_PAREN: self._parse_right_paren
@@ -566,10 +569,13 @@ class Parser:
     def _parse_number(self, token: Token):
         return NumberExpr(token.literal)
 
+    def _parse_boolean(self, token: Token):
+        return BooleanExpr(token.literal)
+
     def _parse_quote(self, token: Token):
         expr_list: List[Expression] = []
         expr_list.append(SymbolExpr('quote'))
-        if not self._is_at_end():
+        if self._is_at_end():
             self._error(token, 'quote cannot be at the end')
         expr_list.append(self._parse_recursive())
         return ExprList.make_list(expr_list)
@@ -635,6 +641,8 @@ def make_prim_compare(py_func: Callable[[float, float], bool]):
 
 
 prim_op_eq = make_prim_compare(lambda a, b: a == b)
+prim_op_lt = make_prim_compare(lambda a, b: a < b)
+prim_op_gt = make_prim_compare(lambda a, b: a > b)
 
 
 def prim_equal(x: Expression, y: Expression):
@@ -674,15 +682,14 @@ def test_one(source: str, **kargs: str):
         print('tokens: %s' % token_str)
         if 'tokens' in kargs:
             assert token_str == kargs['tokens']
-        if len(tokens) == 0:
-            return
-        # parse
-        parser = Parser()
-        expr = parser.parse(tokens)
-        expr_str = stringify_expr(expr) if expr else ''
-        print('expression: %s' % expr_str)
-        if 'expression' in kargs:
-            assert expr_str == kargs['expression']
+        if len(tokens):
+            # parse
+            parser = Parser()
+            expr = parser.parse(tokens)
+            expr_str = stringify_expr(expr) if expr else ''
+            print('expression: %s' % expr_str)
+            if 'expression' in kargs:
+                assert expr_str == kargs['expression']
     except PanicError as err:
         # any kind of panic
         print('panic: %s' % err.message)
@@ -694,30 +701,39 @@ def test_one(source: str, **kargs: str):
 def test():
     test_one(
         '',
-        {
-            'tokens': ''
-        }
+        tokens = ''
+    )
+    test_one(
+        '#true',
+        panic = 'scanner error in line 1: invalid boolean: #true'
+    )
+    test_one(
+        '#t',
+        tokens = 'BOOLEAN:#t'
+    )
+    test_one(
+        '(display\n"abc)',
+        panic = 'scanner error in line 2: unterminated string: "abc)'
+    )
+    test_one(
+        '(display\n"abc"',
+        tokens = 'LEFT_PAREN, SYMBOL:display, STRING:abc',
+        panic = 'parser error at LEFT_PAREN in line 1: list missing right parenthesis'
+    )
+    test_one(
+        '(display\n"abc")',
+        tokens = 'LEFT_PAREN, SYMBOL:display, STRING:abc, RIGHT_PAREN',
+        expression = '(display "abc")'
     )
     test_one(
         '(+ 1 2.5)',
-        {
-            'tokens': 'LEFT_PAREN, SYMBOL:+, NUMBER:1, NUMBER:2.500, RIGHT_PAREN',
-            'expression': '(+ 1 2.500)'
-        }
+        tokens = 'LEFT_PAREN, SYMBOL:+, NUMBER:1, NUMBER:2.500, RIGHT_PAREN',
+        expression = '(+ 1 2.500)'
     )
     test_one(
         '\'(a (b c))',
-        {
-            'tokens': 'QUOTE, LEFT_PAREN, SYMBOL:a, LEFT_PAREN, SYMBOL:b, SYMBOL:c, RIGHT_PAREN, RIGHT_PAREN',
-            'expression': '(quote (a (b c)))'
-        }
-    )
-    test_one(
-        '(display  "abc")',
-        {
-            'tokens': 'LEFT_PAREN, SYMBOL:display, STRING:abc, RIGHT_PAREN',
-            'expression': '(display "abc")'
-        }
+        tokens = 'QUOTE, LEFT_PAREN, SYMBOL:a, LEFT_PAREN, SYMBOL:b, SYMBOL:c, RIGHT_PAREN, RIGHT_PAREN',
+        expression = '(quote (a (b c)))'
     )
 
 
