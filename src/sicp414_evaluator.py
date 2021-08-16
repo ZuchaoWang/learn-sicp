@@ -14,9 +14,26 @@ import enum
 from typing import Callable, ClassVar, Dict, List, Optional, Set, Tuple, Type, Union, cast
 
 
-def panic(msg: str):
-    print(msg, file=sys.stderr)
-    exit(1)
+class PanicError(Exception):
+    def __init__(self, message: str):
+        self.message = message
+
+
+def scheme_panic(message: str):
+    raise PanicError(message)
+
+
+scheme_buf: List[str] = []
+
+
+def scheme_print(message: str):
+    scheme_buf.append(message)
+
+
+def scheme_flush():
+    res = ''.join(scheme_buf)
+    scheme_buf.clear()
+    return res
 
 
 def stringify_float(x: float):
@@ -79,6 +96,7 @@ class TokenStringifier:
 
 token_stringifier = TokenStringifier()
 
+
 def stringify_token(token: Token):
     return token_stringifier.stringify(token)
 
@@ -114,7 +132,7 @@ class Scanner:
                 self._scan_one_token()
                 self._start = self._current
         except ScannerError as err:
-            panic(str(err))
+            scheme_panic(str(err))
         return self._tokens
 
     def _restart(self, source: str):
@@ -413,6 +431,7 @@ class ExprStringifier:
 
 expr_printer = ExprStringifier()
 
+
 def stringify_expr(expr: Expression):
     return expr_printer.stringify(expr)
 
@@ -450,13 +469,17 @@ class ExprEqualityChecker:
     def _check_object(self, x: Union[PairExpr, PrimExpr, ProcExpr], y: Union[PairExpr, PrimExpr, ProcExpr]):
         return x == y
 
+
 expr_equality_checker = ExprEqualityChecker()
+
 
 def is_equal_expr(x: Expression, y: Expression):
     return expr_equality_checker.check(x, y)
 
+
 def is_truthy_expr(expr: Expression):
     return type(expr) != BooleanExpr or cast(BooleanExpr, expr).literal == True
+
 
 class ExprList:
 
@@ -523,7 +546,7 @@ class Parser:
             if not self._is_at_end():
                 self._error(self.tokens[self.current], 'excessive tokens')
         except ParserError as err:
-            panic(str(err))
+            scheme_panic(str(err))
         return expr
 
     def _restart(self, tokens: List[Token]):
@@ -598,6 +621,7 @@ def make_prim_arithmetic(py_func: Callable[[float, float], float]):
 prim_op_add = make_prim_arithmetic(lambda a, b: a+b)
 prim_op_sub = make_prim_arithmetic(lambda a, b: a-b)
 
+
 def make_prim_compare(py_func: Callable[[float, float], bool]):
     def _prim_compare(x: Expression, y: Expression) -> Expression:
         if not isinstance(x, NumberExpr) or not isinstance(y, NumberExpr):
@@ -609,21 +633,22 @@ def make_prim_compare(py_func: Callable[[float, float], bool]):
         return BooleanExpr(res)
     return _prim_compare
 
-prim_op_eq = make_prim_compare(lambda a, b: a==b)
+
+prim_op_eq = make_prim_compare(lambda a, b: a == b)
+
 
 def prim_equal(x: Expression, y: Expression):
     return BooleanExpr(is_equal_expr(x, y))
 
-def prim_print(message: str):
-    print(message, end='')
-
 
 def prim_display(expr: Expression):
-    prim_print(expr_printer.stringify(expr))
+    scheme_print(expr_printer.stringify(expr))
+    return UndefExpr()
 
 
 def prim_newline():
-    prim_print('\n')
+    scheme_print('\n')
+    return UndefExpr()
 
 
 class RuntimeError(Exception):
@@ -638,48 +663,61 @@ class RuntimeError(Exception):
 # TODO: evaluator
 
 
-def test_one(source: str, token_str_expect: Optional[str], expr_str_expect: Optional[str]):
+def test_one(source: str, **kargs: str):
     # source
     print('source: %s' % source)
-    # scan
-    scanner = Scanner()
-    tokens = scanner.scan(source)
-    token_str = ', '.join([stringify_token(t) for t in tokens])
-    print('tokens: %s' % token_str)
-    if token_str_expect is not None:
-        assert token_str == token_str_expect
-    if len(tokens) == 0:
-        return
-    # parse
-    parser = Parser()
-    expr = parser.parse(tokens)
-    expr_str = stringify_expr(expr) if expr else ''
-    print('expression: %s' % expr_str)
-    if expr_str_expect is not None:
-        assert expr_str == expr_str_expect
+    try:
+        # scan
+        scanner = Scanner()
+        tokens = scanner.scan(source)
+        token_str = ', '.join([stringify_token(t) for t in tokens])
+        print('tokens: %s' % token_str)
+        if 'tokens' in kargs:
+            assert token_str == kargs['tokens']
+        if len(tokens) == 0:
+            return
+        # parse
+        parser = Parser()
+        expr = parser.parse(tokens)
+        expr_str = stringify_expr(expr) if expr else ''
+        print('expression: %s' % expr_str)
+        if 'expression' in kargs:
+            assert expr_str == kargs['expression']
+    except PanicError as err:
+        # any kind of panic
+        print('panic: %s' % err.message)
+        if 'panic' in kargs:
+            assert err.message == kargs['panic']
     print('----------')
 
 
 def test():
     test_one(
         '',
-        '',
-        ''
+        {
+            'tokens': ''
+        }
     )
     test_one(
         '(+ 1 2.5)',
-        'LEFT_PAREN, SYMBOL:+, NUMBER:1, NUMBER:2.500, RIGHT_PAREN',
-        '(+ 1 2.500)'
+        {
+            'tokens': 'LEFT_PAREN, SYMBOL:+, NUMBER:1, NUMBER:2.500, RIGHT_PAREN',
+            'expression': '(+ 1 2.500)'
+        }
     )
     test_one(
         '\'(a (b c))',
-        'QUOTE, LEFT_PAREN, SYMBOL:a, LEFT_PAREN, SYMBOL:b, SYMBOL:c, RIGHT_PAREN, RIGHT_PAREN',
-        '(quote (a (b c)))'
+        {
+            'tokens': 'QUOTE, LEFT_PAREN, SYMBOL:a, LEFT_PAREN, SYMBOL:b, SYMBOL:c, RIGHT_PAREN, RIGHT_PAREN',
+            'expression': '(quote (a (b c)))'
+        }
     )
     test_one(
         '(display  "abc")',
-        'LEFT_PAREN, SYMBOL:display, STRING:abc, RIGHT_PAREN',
-        '(display "abc")'
+        {
+            'tokens': 'LEFT_PAREN, SYMBOL:display, STRING:abc, RIGHT_PAREN',
+            'expression': '(display "abc")'
+        }
     )
 
 
