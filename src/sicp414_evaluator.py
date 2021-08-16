@@ -4,37 +4,16 @@
 # no guarantee for performance, or even correctness (we have so few tests)
 #
 # the input of the language is a string, which will be transformed to tokens via Scanner
-# then Parser transforms tokens to scheme lists
-# followed by Analyzer making syntactic analysis on scheme lists to generate functions
-# finally evaluator executes the functions
+# then Parser transforms tokens to scheme expression tree
+# finally the express tree is evaluated directly
 
 import sys
 import inspect
 import enum
-from typing import Callable, ClassVar, Dict, List, Optional, Set, Tuple, Type, Union, cast
+from typing import Callable, ClassVar, Dict, List, Optional, Set, Type, Union, cast
 
 
-class PanicError(Exception):
-    def __init__(self, message: str):
-        self.message = message
-
-
-def scheme_panic(message: str):
-    raise PanicError(message)
-
-
-scheme_buf: List[str] = []
-
-
-def scheme_print(message: str):
-    scheme_buf.append(message)
-
-
-def scheme_flush():
-    res = ''.join(scheme_buf)
-    scheme_buf.clear()
-    return res
-
+# utilities
 
 def stringify_float(x: float):
     if (x == int(x)):
@@ -42,8 +21,55 @@ def stringify_float(x: float):
     else:
         return '%.3f' % x
 
+
+# global config
+# 
+# with suppress_panic being True
+# error will not exit process directly
+# instead error is turned into panic, handled by test_one
+#
+# with suppress_print being True
+# print will not go to console directly
+# instead it is buffer, and later explicitly dumps as string
+#
+# both make test easier
+
+
+scheme_config = {
+    'suppress_panic': True,
+    'suppress_print': True
+}
+
+class PanicError(Exception):
+    def __init__(self, message: str):
+        self.message = message
+
+
+def scheme_panic(message: str):
+    if scheme_config['suppress_panic']:
+        raise PanicError(message)
+    else:
+        print(message, file=sys.stderr)
+
+
+_scheme_buf: List[str] = []
+
+
+def scheme_print(message: str):
+    if scheme_config['suppress_print']:
+        _scheme_buf.append(message)
+    else:
+        print(message, end='')
+
+
+def scheme_flush():
+    res = ''.join(_scheme_buf)
+    _scheme_buf.clear()
+    return res
+
+
 # scheme scanner: string -> tokens
-# only support paranthesis, quote float, string, symbol
+# only support paranthesis, quote, symbol, string, number, boolean
 # string does not support backslash escaped string character
 # we do not generate EOF token, because it seems unnecessary
 # ref: https://craftinginterpreters.com/scanning.html
@@ -66,44 +92,6 @@ class Token:
         self.line = line
         self.lexeme = lexeme
         self.literal = literal
-
-
-class TokenStringifier:
-    _rules: Dict[TokenTag, Callable[[Token], str]]
-
-    def __init__(self):
-        self._rules = {
-            TokenTag.LEFT_PAREN: self._stringify_other,
-            TokenTag.RIGHT_PAREN: self._stringify_other,
-            TokenTag.QUOTE: self._stringify_other,
-            TokenTag.SYMBOL: self._stringify_string,
-            TokenTag.STRING: self._stringify_string,
-            TokenTag.NUMBER: self._stringify_number,
-            TokenTag.BOOLEAN: self._stringify_boolean,
-        }
-
-    def stringify(self, token: Token):
-        f = self._rules[token.tag]
-        return f(token)
-
-    def _stringify_number(self, token: Token):
-        return '%s:%s' % (token.tag.name, stringify_float(token.literal))
-
-    def _stringify_string(self, token: Token):
-        return '%s:%s' % (token.tag.name, token.literal)
-
-    def _stringify_boolean(self, token: Token):
-        return '%s:%s' % (token.tag.name, '#t' if token.literal else '#f')
-
-    def _stringify_other(self, token: Token):
-        return token.tag.name
-
-
-token_stringifier = TokenStringifier()
-
-
-def stringify_token(token: Token):
-    return token_stringifier.stringify(token)
 
 
 class ScannerError(Exception):
@@ -240,12 +228,62 @@ class Scanner:
     def _can_terminate_nonstring(c: str):
         return c.isspace() or c == '(' or c == ')'
 
-# expression and environment
 
+# convert token into string
+
+class TokenStringifier:
+    _rules: Dict[TokenTag, Callable[[Token], str]]
+
+    def __init__(self):
+        self._rules = {
+            TokenTag.LEFT_PAREN: self._stringify_other,
+            TokenTag.RIGHT_PAREN: self._stringify_other,
+            TokenTag.QUOTE: self._stringify_other,
+            TokenTag.SYMBOL: self._stringify_string,
+            TokenTag.STRING: self._stringify_string,
+            TokenTag.NUMBER: self._stringify_number,
+            TokenTag.BOOLEAN: self._stringify_boolean,
+        }
+
+    def stringify(self, token: Token):
+        f = self._rules[token.tag]
+        return f(token)
+
+    def _stringify_number(self, token: Token):
+        return '%s:%s' % (token.tag.name, stringify_float(token.literal))
+
+    def _stringify_string(self, token: Token):
+        return '%s:%s' % (token.tag.name, token.literal)
+
+    def _stringify_boolean(self, token: Token):
+        return '%s:%s' % (token.tag.name, '#t' if token.literal else '#f')
+
+    def _stringify_other(self, token: Token):
+        return token.tag.name
+
+
+# we only need one TokenStringifier
+# so let's declare its instance
+# and wrap it in stringify_token
+
+_token_stringifier = TokenStringifier()
+
+def stringify_token(token: Token):
+    return _token_stringifier.stringify(token)
+
+
+# expression
+# will specified as various classes, and this helps static type checking
+# if we represent it as single class with different tag (like token), we won't have type checking with python's typing
 
 class Expression:
     pass
 
+
+# environment
+# see chap 4.1.3 and https://craftinginterpreters.com/statements-and-state.html
+# it supports set_at and lookup_at, which will be used in resolver
+# ref: https://craftinginterpreters.com/resolving-and-binding.html
 
 class EnvironmentError(Exception):
     def __init__(self, message: str):
@@ -315,14 +353,20 @@ class Environment:
         # this error will be handled in other classes
         raise EnvironmentError(message)
 
+
 # define different types of expressions as difference classes for better type checking
-# if we use tag to differentiate different types, typing does not allow specify tag as type
 #
 # we do not differentiate between object and experssion
 # because they are so similar in Scheme
+# in fact, a list can be both an object and an expression
 #
 # empty list is represented as special nil expression
 # non-empty list is represented as pairs
+#
+# conplex syntax are just represented as list, e.g. if, define, begin
+# see chap 4.1.2
+#
+# we also have undef
 
 
 class SymbolExpr(Expression):
@@ -371,6 +415,9 @@ class PrimExpr(Expression):
         self.name = name
         self.arity = arity
         self.body = body
+
+
+# convert expression into string
 
 
 class ExprStringifier:
@@ -430,13 +477,20 @@ class ExprStringifier:
     def _stringify_primitive(self, expr: PrimExpr):
         return '[primitive %s]' % expr.name
 
+# we only need one ExprStringifier
+# so let's declare its instance
+# and wrap it in stringify_expr
 
-expr_printer = ExprStringifier()
+
+_expr_printer = ExprStringifier()
 
 
 def stringify_expr(expr: Expression):
-    return expr_printer.stringify(expr)
+    return _expr_printer.stringify(expr)
 
+
+# check whether two expressions are equal
+# defined according to scheme's equal? procedure
 
 class ExprEqualityChecker:
     # instance vars
@@ -472,15 +526,20 @@ class ExprEqualityChecker:
         return x == y
 
 
-expr_equality_checker = ExprEqualityChecker()
+_expr_equality_checker = ExprEqualityChecker()
 
 
 def is_equal_expr(x: Expression, y: Expression):
-    return expr_equality_checker.check(x, y)
+    return _expr_equality_checker.check(x, y)
 
+# in scheme, the only thing not truthy is #f
+# except that everything is truthy, including 0, "", '(), <#undef>
 
 def is_truthy_expr(expr: Expression):
     return type(expr) != BooleanExpr or cast(BooleanExpr, expr).literal == True
+
+
+# handy functions to convert python list of expressions into scheme pairs
 
 
 class ExprList:
@@ -501,7 +560,9 @@ class ExprList:
             head = head.right
         return count
 
+
 # scheme parser: tokens -> scheme lists
+# very simple recusive descent, see how _parse_quote and _parse_left_paren call _parse_recursive
 # ref: https://craftinginterpreters.com/parsing-expressions.html
 
 
@@ -607,6 +668,40 @@ class Parser:
         raise ParserError(token, message)
 
 
+# scheme evaluator
+# correspond to chap 4.1.1
+
+class RuntimeError(Exception):
+    def __init__(self, token: Token, message: str):
+        self.token = token
+        self.message = message
+
+    def __str__(self):
+        return 'runtime error at %s in line %d: %s' % (stringify_token(self.token), self.token.line+1, self.message)
+
+
+class Evaluator:
+    _rules: Dict[str, Callable[[Expression], Expression]]
+    _type_rules: Dict[Type, Callable[[Expression], Expression]]
+
+    def __init__(self, rules: Dict[str, Callable[[Expression], Expression]]):
+        self._rules = rules
+        self._type_rules = {
+            SymbolExpr: None,
+            StringExpr: None,
+            NumberExpr: None,
+            BooleanExpr: None,
+            NilExpr: None,
+            UndefExpr: None,
+            PairExpr: None,
+        }
+
+    def evaluate(self, expr: Expression) -> Expression:
+        pass
+
+
+# primitive definitions
+
 class PrimError(Exception):
     def __init__(self, message):
         self.message = message
@@ -650,7 +745,7 @@ def prim_equal(x: Expression, y: Expression):
 
 
 def prim_display(expr: Expression):
-    scheme_print(expr_printer.stringify(expr))
+    scheme_print(stringify_expr(expr))
     return UndefExpr()
 
 
@@ -659,27 +754,15 @@ def prim_newline():
     return UndefExpr()
 
 
-class RuntimeError(Exception):
-    def __init__(self, token: Token, message: str):
-        self.token = token
-        self.message = message
-
-    def __str__(self):
-        return 'runtime error at %s in line %d: %s' % (stringify_token(self.token), self.token.line+1, self.message)
-
-
-# TODO: evaluator
-
-
 def test_one(source: str, **kargs: str):
     # source
-    print('source: %s' % source)
+    print('* source: %s' % source)
     try:
         # scan
         scanner = Scanner()
         tokens = scanner.scan(source)
         token_str = ', '.join([stringify_token(t) for t in tokens])
-        print('tokens: %s' % token_str)
+        print('* tokens: %s' % token_str)
         if 'tokens' in kargs:
             assert token_str == kargs['tokens']
         if len(tokens):
@@ -687,12 +770,12 @@ def test_one(source: str, **kargs: str):
             parser = Parser()
             expr = parser.parse(tokens)
             expr_str = stringify_expr(expr) if expr else ''
-            print('expression: %s' % expr_str)
+            print('* expression: %s' % expr_str)
             if 'expression' in kargs:
                 assert expr_str == kargs['expression']
     except PanicError as err:
         # any kind of panic
-        print('panic: %s' % err.message)
+        print('* panic: %s' % err.message)
         if 'panic' in kargs:
             assert err.message == kargs['panic']
     print('----------')
@@ -704,12 +787,12 @@ def test():
         tokens = ''
     )
     test_one(
-        '#true',
+        '(if #true 1 2)',
         panic = 'scanner error in line 1: invalid boolean: #true'
     )
     test_one(
-        '#t',
-        tokens = 'BOOLEAN:#t'
+        '(if #t 1 2)',
+        tokens = 'LEFT_PAREN, SYMBOL:if, BOOLEAN:#t, NUMBER:1, NUMBER:2, RIGHT_PAREN'
     )
     test_one(
         '(display\n"abc)',
