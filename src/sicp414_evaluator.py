@@ -594,16 +594,17 @@ class PrimVal(SchemeVal):
 
 
 class ProcVal(SchemeVal):
-    def __init__(self, name: str, parameters: List[str]):
+    def __init__(self, name: str, parameters: List[str], env: Environment):
         self.name = name
         self.parameters = parameters
+        self.env = env
 
 
 class ProcPlainVal(ProcVal):
     '''A simple implementation of procedure, later we will have another representation'''
 
-    def __init__(self, name: str, parameters: List[str], body: List[Expression]):
-        ProcVal.__init__(self, name, parameters)
+    def __init__(self, name: str, parameters: List[str], body: List[Expression], env: Environment):
+        ProcVal.__init__(self, name, parameters, env)
         self.body = body
 
 
@@ -927,7 +928,7 @@ def eval_call(expr: ListExpr, env: Environment, eval: EvalFuncType):
         if len(operator.parameters) != len(operands):
             raise RuntimeError(expr.token, '%s expect %d arguments, get %d' % (
                 operator.name, len(operator.parameters), len(operands)))
-        new_env = env.extend(operator.parameters, operands)
+        new_env = operator.env.extend(operator.parameters, operands)
         for body_expr in operator.body:
             res = eval(body_expr, new_env)
         return res
@@ -1002,7 +1003,7 @@ def eval_define(expr: ListExpr, env: Environment, eval: EvalFuncType):
         proc_name, proc_para, proc_body = cast(
             Tuple[SymbolExpr, List[SymbolExpr], List[Expression]], reparsed)
         proc_obj = ProcPlainVal(proc_name.token.literal, [
-                                p.token.literal for p in proc_para], proc_body)
+                                p.token.literal for p in proc_para], proc_body, env)
         env.define(proc_name.token.literal, proc_obj)
         return SymbolVal(proc_name.token.literal)
 
@@ -1063,7 +1064,7 @@ def reparse_lambda(expr: ListExpr):
 def eval_lambda(expr: ListExpr, env: Environment, eval: EvalFuncType):
     '''return the procedure itself'''
     proc_para, proc_body = reparse_lambda(expr)
-    return ProcPlainVal('lambda', [p.token.literal for p in proc_para], proc_body)
+    return ProcPlainVal('lambda', [p.token.literal for p in proc_para], proc_body, env)
 
 
 def reparse_and(expr: ListExpr):
@@ -1360,10 +1361,12 @@ def test_env():
 
 
 def test_eval():
+    # arithmetic
     test_one(
         '(+ (* 3 5) (- 10 6))',
         result='19'
     )
+    # composition
     test_one(
         '''
         (define (square x) (* x x))
@@ -1372,10 +1375,12 @@ def test_eval():
         ''',
         result='25'
     )
+    # lambda and or
     test_one(
         '((lambda (x y) (or (> x y) (= x y))) 1 2)',
         result='#f'
     )
+    # recursion
     test_one(
         '''
         (define (factorial n)
@@ -1386,6 +1391,7 @@ def test_eval():
         ''',
         result='120'
     )
+    # iteration
     test_one(
         '''
         (define (factorial n)
@@ -1399,10 +1405,12 @@ def test_eval():
         ''',
         result='120'
     )
+    # begin
     test_one(
         '(begin (+ 1 2) (* 3 4))',
         result='12'
     )
+    # mutation
     test_one(
         '''
         (define a 1)
@@ -1413,6 +1421,7 @@ def test_eval():
         ''',
         result='3'
     )
+    # list
     test_one(
         '''
         (define a '(2 3 4))
@@ -1426,6 +1435,17 @@ def test_eval():
         ''',
         output='1\n(2 3 4)\n(3 4)',
         result='4'
+    )
+    # closure
+    test_one(
+        '''
+        (define (f)
+          (define x 1)
+          (lambda () x))
+        (define a (f))
+        (a)
+        ''',
+        result='1'
     )
 
 
