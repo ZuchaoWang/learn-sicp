@@ -311,42 +311,47 @@ class Environment:
     '''see chap 4.1.3 and https://craftinginterpreters.com/statements-and-state.html'''
 
     def __init__(self, bindings: Dict[str, SchemeVal] = {}, enclosing: Optional["Environment"] = None):
-        self._bindings = bindings
-        self._enclosing = enclosing
+        self.bindings = bindings
+        self.enclosing = enclosing
 
-    def define(self, name: str, sv: SchemeVal):
-        self._bindings[name] = sv
+'''
+we use functional programming style, i.e. moving all methods out of class
+in this way, new operations can be easily added
+'''
 
-    def set(self, name: str, sv: SchemeVal):
-        env = self._find_env(name)
-        if env is None:
-            self._error('%s not defined' % name)
-        else:
-            env._bindings[name] = sv
+def _env_error(message: str):
+    '''this error will be handled in other classes'''
+    raise EnvironmentError(message)
 
-    def lookup(self, name: str):
-        env = self._find_env(name)
-        if env is None:
-            self._error('%s not defined' % name)
-        else:
-            return env._bindings[name]
+def _env_find(env: Environment, name: str):
+    cur: Optional[Environment] = env
+    while cur is not None:
+        if name in cur.bindings:
+            return cur
+        cur = cur.enclosing
+    return None
 
-    def _find_env(self, name: str):
-        env: Optional[Environment] = self
-        while env is not None:
-            if name in env._bindings:
-                return env
-            env = env._enclosing
-        return None
+def env_define(env: Environment, name: str, sv: SchemeVal):
+    env.bindings[name] = sv
 
-    def extend(self, parameter: List[str], arguments: List[SchemeVal]):
-        return Environment(dict(zip(parameter, arguments)), self)
+def env_set(env: Environment, name: str, sv: SchemeVal):
+    env = _env_find(env, name)
+    if env is None:
+        _env_error('%s not defined' % name)
+    else:
+        env.bindings[name] = sv
 
-    def _error(self, message: str):
-        '''this error will be handled in other classes'''
-        raise EnvironmentError(message)
+def env_lookup(env: Environment, name: str):
+    env = _env_find(env, name)
+    if env is None:
+        _env_error('%s not defined' % name)
+    else:
+        return env.bindings[name]
 
+def env_extend(env: Environment, parameter: List[str], arguments: List[SchemeVal]):
+    return Environment(dict(zip(parameter, arguments)), env)
 
+    
 '''
 define different types of expressions as difference classes for better type checking
 conplex syntax are just represented as list, e.g. if, define, begin
@@ -862,7 +867,7 @@ class Evaluator:
 
     def _eval_symbol(self, expr: SymbolExpr, env: Environment):
         try:
-            return env.lookup(expr.token.literal)
+            return env_lookup(env, expr.token.literal)
         except EnvironmentError as err:
             raise RuntimeError(expr.token, err.message)
 
@@ -928,7 +933,7 @@ def eval_call(expr: ListExpr, env: Environment, eval: EvalFuncType):
         if len(operator.parameters) != len(operands):
             raise RuntimeError(expr.token, '%s expect %d arguments, get %d' % (
                 operator.name, len(operator.parameters), len(operands)))
-        new_env = operator.env.extend(operator.parameters, operands)
+        new_env = env_extend(operator.env, operator.parameters, operands)
         for body_expr in operator.body:
             res = eval(body_expr, new_env)
         return res
@@ -951,7 +956,7 @@ def eval_set(expr: ListExpr, env: Environment, eval: EvalFuncType):
     symbol_name, initializer_expr = reparse_set(expr)
     intializer = eval(initializer_expr, env)
     try:
-        env.set(symbol_name.token.literal, intializer)
+        env_set(env, symbol_name.token.literal, intializer)
         return intializer
     except EnvironmentError as err:
         raise RuntimeError(expr.token, err.message)
@@ -997,14 +1002,14 @@ def eval_define(expr: ListExpr, env: Environment, eval: EvalFuncType):
         var_name, initializer_expr = cast(
             Tuple[SymbolExpr, Expression], reparsed)
         intializer = eval(initializer_expr, env)
-        env.define(var_name.token.literal, intializer)
+        env_define(env, var_name.token.literal, intializer)
         return SymbolVal(var_name.token.literal)
     else:  # define procedure
         proc_name, proc_para, proc_body = cast(
             Tuple[SymbolExpr, List[SymbolExpr], List[Expression]], reparsed)
         proc_obj = ProcPlainVal(proc_name.token.literal, [
                                 p.token.literal for p in proc_para], proc_body, env)
-        env.define(proc_name.token.literal, proc_obj)
+        env_define(env, proc_name.token.literal, proc_obj)
         return SymbolVal(proc_name.token.literal)
 
 
@@ -1121,7 +1126,7 @@ def register_primitive(env: Environment, name: str, py_func: Callable):
     '''add primitive to environment'''
     arity = len(inspect.getfullargspec(py_func).args)
     primitive = PrimVal(name, arity, py_func)
-    env.define(name, primitive)
+    env_define(env, name, primitive)
 
 
 def make_prim_num2_num(py_func: Callable[[float, float], float]):
