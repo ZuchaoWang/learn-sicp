@@ -640,7 +640,7 @@ class ValueStringifier:
         return format_float(sv.value)
 
     def _stringify_boolean(self, sv: BooleanVal):
-        return '#t' if sv.value else '#f'
+        return format_bool(sv.value)
 
     def _stringify_nil(self, sv: NilVal):
         return '()'
