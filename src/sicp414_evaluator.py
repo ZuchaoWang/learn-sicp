@@ -1452,6 +1452,19 @@ def test_eval():
         ''',
         result='1'
     )
+    # scope conflict
+    # should error when we have resolver
+    test_one(
+        '''
+        (define x 1)
+        (define (f)
+          (define y x)
+          (define x 2)
+          y)
+        (f)
+        ''',
+        result='1'
+    )
 
 
 def test():
