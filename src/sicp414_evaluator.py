@@ -304,15 +304,15 @@ class Environment:
         self._bindings = bindings
         self._enclosing = enclosing
 
-    def define(self, name: str, value: SchemeVal):
-        self._bindings[name] = value
+    def define(self, name: str, sv: SchemeVal):
+        self._bindings[name] = sv
 
-    def set(self, name: str, value: SchemeVal):
+    def set(self, name: str, sv: SchemeVal):
         env = self._find_env(name)
         if env is None:
             self._error('%s not defined' % name)
         else:
-            env._bindings[name] = value
+            env._bindings[name] = sv
 
     def lookup(self, name: str):
         env = self._find_env(name)
@@ -329,9 +329,9 @@ class Environment:
             env = env._enclosing
         return None
 
-    def set_at(self, distance: int, name: str, value: SchemeVal):
+    def set_at(self, distance: int, name: str, sv: SchemeVal):
         env = self._ancestor(distance)
-        env._bindings[name] = value
+        env._bindings[name] = sv
 
     def lookup_at(self, distance: int, name: str):
         env = self._ancestor(distance)
@@ -363,18 +363,8 @@ class Environment:
 
 
 # define different types of expressions as difference classes for better type checking
-#
-# we do not differentiate between object and experssion
-# because they are so similar in Scheme
-# in fact, a list can be both an object and an expression
-#
-# empty list is represented as special nil expression
-# non-empty list is represented as pairs
-#
 # conplex syntax are just represented as list, e.g. if, define, begin
 # see chap 4.1.2
-#
-# we also have undef
 
 
 class SymbolExpr(Expression):
@@ -558,6 +548,18 @@ class Parser:
         raise ParserError(token, message)
 
 # scheme value definitions
+#
+# value and experssion are very similar in Scheme
+# for example, a list can be both an object and an expression
+# but we still differentitate them, giving them different base class, because
+# undef, procedure and primitive only appears in value, not in expression
+# expression need to store token for debugging, value doesn't have to
+#
+# because of the differentiation, we have to implement quote
+# to convert expression to the "same" value
+#
+# empty list is represented as special nil expression
+# non-empty list is represented as pairs
 
 class SymbolVal(SchemeVal):
     def __init__(self, value: str):
@@ -671,7 +673,6 @@ class ValueStringifier:
 
 _value_stringifier = ValueStringifier()
 
-
 def stringify_value(sv: SchemeVal):
     return _value_stringifier.stringify(sv)
 
@@ -715,7 +716,7 @@ class EqualityChecker:
 _equality_checker = EqualityChecker()
 
 
-def is_equal_expr(x: SchemeVal, y: SchemeVal):
+def is_equal(x: SchemeVal, y: SchemeVal):
     return _equality_checker.check(x, y)
 
 # in scheme, the only thing not truthy is #f
@@ -726,10 +727,10 @@ def is_truthy_expr(sv: SchemeVal):
 
 # utility functions for pair value
 
-def pair_from_list(val_list: List[SchemeVal]):
+def pair_from_list(sv_list: List[SchemeVal]):
     head: SchemeVal = NilVal()
-    for i in range(len(val_list)-1, -1, -1):
-        head = PairVal(val_list[i], head)
+    for i in range(len(sv_list)-1, -1, -1):
+        head = PairVal(sv_list[i], head)
     return head
 
 def pair_length(sv: PairVal):
@@ -739,6 +740,49 @@ def pair_length(sv: PairVal):
         count += 1
         head = head.right
     return count
+
+# quote expression to value
+
+class ExprQuoter:
+
+    # instance vars
+    _rules: Dict[Type, Callable[[Expression], SchemeVal]]
+
+    def __init__(self):
+        self._rules = {
+            SymbolExpr: self._quote_symbol,
+            StringExpr: self._quote_string,
+            NumberExpr: self._quote_number,
+            BooleanExpr: self._quote_boolean,
+            ListExpr: self._quote_list,
+        }
+
+    def quote(self, expr: Expression):
+        f = self._rules[type(expr)]
+        return f(expr)
+
+    def _quote_symbol(self, expr: SymbolExpr):
+        return SymbolVal(expr.token.literal)
+
+    def _quote_string(self, expr: StringExpr):
+        return StringVal(expr.token.literal)
+
+    def _quote_number(self, expr: NumberExpr):
+        return NumberVal(expr.token.literal)
+
+    def _quote_boolean(self, expr: BooleanExpr):
+        return BooleanVal(expr.token.literal)
+
+    def _quote_list(self, expr: ListExpr):
+        subvals = [self.quote(subexpr) for subexpr in expr.expressions]
+        return pair_from_list(subvals)
+
+
+_expr_quoter = ExprQuoter()
+
+
+def quote_expr(expr: Expression):
+    return _expr_quoter.quote(expr)
 
 
 # scheme evaluator
@@ -757,45 +801,51 @@ class RuntimeError(Exception):
         return 'runtime error at %s in line %d: %s' % (stringify_token(self.token), self.token.line+1, self.message)
 
 
-EvalFuncType = Callable[[Expression, Environment], Expression]
+EvalFuncType = Callable[[Expression, Environment], SchemeVal]
 
 
 class Evaluator:
-    _rules: Dict[str, Callable[[Expression, Environment, EvalFuncType], Expression]]
+    _rules: Dict[str, Callable[[Expression, Environment, EvalFuncType], SchemeVal]]
     _type_rules: Dict[Type, EvalFuncType]
 
-    def __init__(self, rules: Dict[str, Callable[[Expression, Environment, EvalFuncType], Expression]]):
+    def __init__(self, rules: Dict[str, Callable[[Expression, Environment, EvalFuncType], SchemeVal]]):
         self._rules = rules
         self._type_rules = {
-      Val: self._eval_symbol, # type: ignore
-            StringExpr: self._eval_pass, # type: ignore
-            NumberExpr: self._eval_pass, # type: ignore
-            BooleanExpr: self._eval_pass, # type: ignore
-            NilExpr: self._eval_pass, # type: ignore
-            UndefExpr: self._eval_pass, # type: ignore
-            PairExpr: self._eval_pair, # type: ignore
+            SymbolExpr: self._eval_symbol, # type: ignore
+            StringExpr: self._eval_string, # type: ignore
+            NumberExpr: self._eval_number, # type: ignore
+            BooleanExpr: self._eval_boolean, # type: ignore
+            ListExpr: self._eval_list, # type: ignore
         }
 
-    def evaluate(self, expr: Expression, env: Environment) -> Expression:
+    def evaluate(self, expr: Expression, env: Environment) -> SchemeVal:
         try:
             res = self._evaluate_recursive(expr, env)
         except RuntimeError as err:
             scheme_panic(str(err))
         return res
 
-    def _evaluate_recursive(self, expr: Expression, env: Environment) -> Expression:
+    def _evaluate_recursive(self, expr: Expression, env: Environment) -> SchemeVal:
         f = self._type_rules[type(expr)]
         return f(expr, env)
 
-    def _eval_symbol(self, expr: SymbolExpr, env: Environment) -> Expression:
+    def _eval_symbol(self, expr: SymbolExpr, env: Environment):
         return self._rules['symbol'](expr, env, self._evaluate_recursive)
 
-    def _eval_pass(self, expr: Union[StringExpr, NumberExpr, BooleanExpr, NilExpr, UndefExpr], env: Environment) -> Expression:
-        return expr
+    def _eval_string(self, expr: StringExpr):
+        return StringVal(expr.token.literal)
 
-    def _eval_pair(self, expr: PairExpr, env: Environment) -> Expression:
-        if type(expr.left) == SymbolExpr:
-            symbol_name = cast(SymbolExpr, expr.left).literal
+    def _eval_number(self, expr: NumberExpr):
+        return NumberVal(expr.token.literal)
+
+    def _eval_boolean(self, expr: BooleanExpr):
+        return BooleanVal(expr.token.literal)
+
+    def _eval_list(self, expr: ListExpr, env: Environment):
+        if len(expr.expressions) == 0:
+            return NilVal()
+        elif type(expr.expressions[0]) == SymbolExpr:
+            symbol_name = cast(SymbolExpr, expr.expressions[0]).token.literal
             if symbol_name in self._rules:
                 return self._rules[symbol_name](expr, env, self._evaluate_recursive)
         return self._rules['call'](expr, env, self._evaluate_recursive)
@@ -804,25 +854,52 @@ class Evaluator:
 # evaluator rule definitions
 
 
-def eval_symbol(expr: SymbolExpr, env: Environment, eval: EvalFuncType) -> Expression:
+def eval_symbol(expr: SymbolExpr, env: Environment, eval: EvalFuncType):
     try:
-        return env.lookup(expr.literal)
+        return env.lookup(expr.token.literal)
     except EnvironmentError as err:
         raise RuntimeError(expr.token, err.message)
+
+
+def eval_quote(expr: ListExpr, env: Environment, eval: EvalFuncType):
+    if len(expr.expressions) != 2:
+        raise RuntimeError(expr.token, 'quote should be followed by exactly one expression, now %d' % (len(expr.expressions) - 1))
+    return quote_expr(expr.expressions[1])
+
+
+def eval_call(expr: ListExpr, env: Environment, eval: EvalFuncType):
+    if len(expr.expressions) == 0:
+        raise RuntimeError(expr.token, 'call should not be empty')
+    operator = eval(expr.expressions[0], env)
+    operands = [eval(subexpr, env) for subexpr in expr.expressions[1:]]
+    if isinstance(operator, PrimVal):
+        if operator.arity != len(operands):
+            raise RuntimeError(expr.token, '%s expect %d arguments, get %d' % (operator.name, operator.arity, len(operands)))
+        try:
+            return operator.body(*operands)
+        except PrimError as err:
+            raise RuntimeError(expr.token, err.message)
+    elif isinstance(operator, ProcVal):
+        if len(operator.parameters) != len(operands):
+            raise RuntimeError(expr.token, '%s expect %d arguments, get %d' % (operator.name, len(operator.parameters), len(operands)))
+        new_env = env.extend(operator.parameters, operands)
+        return operator.body(new_env)
+    else:
+        raise RuntimeError(expr.token, 'cannot call %s expression' % type(expr).__name__)
 
 
 # primitive definitions
 
 
 def make_prim_arithmetic(py_func: Callable[[float, float], float]):
-    def _prim_arithmetic(x: Expression, y: Expression) -> Expression:
-        if not isinstance(x, NumberExpr) or not isinstance(y, NumberExpr):
+    def _prim_arithmetic(x: SchemeVal, y: SchemeVal) -> SchemeVal:
+        if not isinstance(x, NumberVal) or not isinstance(y, NumberVal):
             raise PrimError('%s requires both operators to be numbers, now %s and %s' % (
                 py_func.__name__, type(x), type(y)))
-        x = cast(NumberExpr, x)
-        y = cast(NumberExpr, y)
-        res = py_func(x.literal, y.literal)
-        return NumberExpr(res)
+        x = cast(NumberVal, x)
+        y = cast(NumberVal, y)
+        res = py_func(x.value, y.value)
+        return NumberVal(res)
     return _prim_arithmetic
 
 
@@ -831,14 +908,14 @@ prim_op_sub = make_prim_arithmetic(lambda a, b: a-b)
 
 
 def make_prim_compare(py_func: Callable[[float, float], bool]):
-    def _prim_compare(x: Expression, y: Expression) -> Expression:
-        if not isinstance(x, NumberExpr) or not isinstance(y, NumberExpr):
+    def _prim_compare(x: SchemeVal, y: SchemeVal) -> SchemeVal:
+        if not isinstance(x, NumberVal) or not isinstance(y, NumberVal):
             raise PrimError('%s requires both operators to be numbers, now %s and %s' % (
                 py_func.__name__, type(x), type(y)))
-        x = cast(NumberExpr, x)
-        y = cast(NumberExpr, y)
-        res = py_func(x.literal, y.literal)
-        return BooleanExpr(res)
+        x = cast(NumberVal, x)
+        y = cast(NumberVal, y)
+        res = py_func(x.value, y.value)
+        return BooleanVal(res)
     return _prim_compare
 
 
@@ -847,18 +924,18 @@ prim_op_lt = make_prim_compare(lambda a, b: a < b)
 prim_op_gt = make_prim_compare(lambda a, b: a > b)
 
 
-def prim_equal(x: Expression, y: Expression):
-    return BooleanExpr(is_equal_expr(x, y))
+def prim_equal(x: SchemeVal, y: SchemeVal):
+    return BooleanExpr(is_equal(x, y))
 
 
-def prim_display(expr: Expression):
-    scheme_print(stringify_expr(expr))
-    return UndefExpr()
+def prim_display(sv: SchemeVal):
+    scheme_print(stringify_value(sv))
+    return UndefVal()
 
 
 def prim_newline():
     scheme_print('\n')
-    return UndefExpr()
+    return UndefVal()
 
 
 def test_one(source: str, **kargs: str):
