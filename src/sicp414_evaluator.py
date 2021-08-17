@@ -1,11 +1,13 @@
-# the goal is to implement a simplified scheme language
-# it's only a toy, which will not follow the language specification
-# and only support a small proportion of the feautres
-# no guarantee for performance, or even correctness (we have so few tests)
-#
-# the input of the language is a string, which will be transformed to tokens via Scanner
-# then Parser transforms tokens to scheme expression tree
-# finally the express tree is evaluated directly
+'''
+the goal is to implement a simplified scheme language
+it's only a toy, which will not follow the language specification
+and only support a small proportion of the feautres
+no guarantee for performance, or even correctness (we have so few tests)
+
+the input of the language is a string, which will be transformed to tokens via Scanner
+then Parser transforms tokens to a list of scheme expression trees
+finally all expression trees in the list are evaluated directly
+'''
 
 import sys
 import inspect
@@ -13,31 +15,33 @@ import enum
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Set, Tuple, Type, Union, cast
 
 
-# utilities
+'''basic formatting'''
 
-def stringify_float(x: float):
+
+def format_float(x: float):
     if (x == int(x)):
         return '%d' % x
     else:
         return '%.3f' % x
 
 
-def stringify_bool(x: bool):
+def format_bool(x: bool):
     return '#t' if x else '#f'
 
 
-# global config
-#
-# with suppress_panic being True
-# error will not exit process directly
-# instead error is turned into panic, handled by test_one
-#
-# with suppress_print being True
-# print will not go to console directly
-# instead it is buffer, and later explicitly dumps as string
-#
-# both make test easier
+'''
+global config
 
+with suppress_panic being True
+error will not exit process directly
+instead error is turned into panic, handled by test_one
+
+with suppress_print being True
+print will not go to console directly
+instead it is buffer, and later explicitly dumps as string
+
+both make test easier
+'''
 
 scheme_config = {
     'suppress_panic': True,
@@ -74,11 +78,13 @@ def scheme_flush():
     return res
 
 
-# scheme scanner: string -> tokens
-# only support paranthesis, quote, symbol, string, number, boolean
-# string does not support backslash escaped string character
-# we do not generate EOF token, because it seems unnecessary
-# ref: https://craftinginterpreters.com/scanning.html
+'''
+scheme scanner: string -> tokens
+only support paranthesis, quote, symbol, string, number, boolean
+string does not support backslash escaped string character
+we do not generate EOF token, because it seems unnecessary
+ref: https://craftinginterpreters.com/scanning.html
+'''
 
 
 @enum.unique
@@ -235,9 +241,9 @@ class Scanner:
         return c.isspace() or c == '(' or c == ')'
 
 
-# convert token into string
-
 class TokenStringifier:
+    '''convert token into string'''
+
     _rules: Dict[TokenTag, Callable[[Token], str]]
 
     def __init__(self):
@@ -256,21 +262,23 @@ class TokenStringifier:
         return f(token)
 
     def _stringify_number(self, token: Token):
-        return '%s:%s' % (token.tag.name, stringify_float(token.literal))
+        return '%s:%s' % (token.tag.name, format_float(token.literal))
 
     def _stringify_string(self, token: Token):
         return '%s:%s' % (token.tag.name, token.literal)
 
     def _stringify_boolean(self, token: Token):
-        return '%s:%s' % (token.tag.name, stringify_bool(token.literal))
+        return '%s:%s' % (token.tag.name, format_bool(token.literal))
 
     def _stringify_other(self, token: Token):
         return token.tag.name
 
 
-# we only need one TokenStringifier
-# so let's declare its instance
-# and wrap it in stringify_token
+'''
+we only need one TokenStringifier
+so let's declare its instance
+and wrap it in stringify_token
+'''
 
 _token_stringifier = TokenStringifier()
 
@@ -279,9 +287,12 @@ def stringify_token(token: Token):
     return _token_stringifier.stringify(token)
 
 
-# expression and schemeval
-# will specified as various classes, and this helps static type checking
-# if we represent it as single class with different tag (like token), we won't have type checking with python's typing
+'''
+expression and schemeval
+will specified as various classes, and this helps static type checking
+if we represent it as single class with different tag (like token), we won't have type checking with python's typing
+'''
+
 
 class Expression:
     pass
@@ -291,17 +302,14 @@ class SchemeVal:
     pass
 
 
-# environment
-# see chap 4.1.3 and https://craftinginterpreters.com/statements-and-state.html
-# it supports set_at and lookup_at, which will be used in resolver
-# ref: https://craftinginterpreters.com/resolving-and-binding.html
-
 class EnvironmentError(Exception):
     def __init__(self, message: str):
         self.message = message
 
 
 class Environment:
+    '''see chap 4.1.3 and https://craftinginterpreters.com/statements-and-state.html'''
+
     def __init__(self, bindings: Dict[str, SchemeVal] = {}, enclosing: Optional["Environment"] = None):
         self._bindings = bindings
         self._enclosing = enclosing
@@ -331,35 +339,19 @@ class Environment:
             env = env._enclosing
         return None
 
-    # def set_at(self, distance: int, name: str, sv: SchemeVal):
-    #     env = self._ancestor(distance)
-    #     env._bindings[name] = sv
-
-    # def lookup_at(self, distance: int, name: str):
-    #     env = self._ancestor(distance)
-    #     return env._bindings[name]
-
-    # def _ancestor(self, distance: int):
-    #     env = self
-    #     while distance > 0:
-    #         if env._enclosing is None:
-    #             self._error('no ancestor at distance %d' % distance)
-    #         else:
-    #             env = env._enclosing
-    #             distance -= 1
-    #     return env
-
     def extend(self, parameter: List[str], arguments: List[SchemeVal]):
         return Environment(dict(zip(parameter, arguments)), self)
 
     def _error(self, message: str):
-        # this error will be handled in other classes
+        '''this error will be handled in other classes'''
         raise EnvironmentError(message)
 
 
-# define different types of expressions as difference classes for better type checking
-# conplex syntax are just represented as list, e.g. if, define, begin
-# see chap 4.1.2
+'''
+define different types of expressions as difference classes for better type checking
+conplex syntax are just represented as list, e.g. if, define, begin
+see chap 4.1.2
+'''
 
 
 class SymbolExpr(Expression):
@@ -388,9 +380,8 @@ class ListExpr(Expression):
         self.expressions = expressions
 
 
-# convert expression into string
-
 class ExprStringifier:
+    '''convert expression into string'''
 
     # instance vars
     _rules: Dict[Type, Callable[[Expression], str]]
@@ -415,30 +406,27 @@ class ExprStringifier:
         return '"%s"' % expr.token.literal
 
     def _stringify_number(self, expr: NumberExpr):
-        return stringify_float(expr.token.literal)
+        return format_float(expr.token.literal)
 
     def _stringify_boolean(self, expr: BooleanExpr):
-        return stringify_bool(expr.token.literal)
+        return format_bool(expr.token.literal)
 
     def _stringify_list(self, expr: ListExpr):
         substrs = [self.stringify(subexpr) for subexpr in expr.expressions]
         return '(%s)' % (' '.join(substrs))
 
 
-# we only need one ExprStringifier
-# so let's declare its instance
-# and wrap it in stringify_expr
+'''
+we only need one ExprStringifier
+so let's declare its instance
+and wrap it in stringify_expr
+'''
 
 _expr_stringifier = ExprStringifier()
 
 
 def stringify_expr(expr: Expression):
     return _expr_stringifier.stringify(expr)
-
-
-# scheme parser: tokens -> scheme lists
-# very simple recusive descent, see how _parse_quote and _parse_left_paren call _parse_recursive
-# ref: https://craftinginterpreters.com/parsing-expressions.html
 
 
 class ParserError(Exception):
@@ -455,6 +443,10 @@ class ParserError(Exception):
 
 class Parser:
     '''
+    scheme parser: tokens -> scheme lists
+    very simple recursive descent, see how _parse_quote and _parse_left_paren call _parse_recursive
+    ref: https://craftinginterpreters.com/parsing-expressions.html
+
     expression -> SYMBOL | STRING | NUMBER | quote | list;
     quote -> QUOTE expression;
     list -> LEFT_PAREN ( expression )* RIGHT_PAREN;
@@ -478,15 +470,14 @@ class Parser:
 
     def parse(self, tokens: List[Token]):
         self._restart(tokens)
+        expr_list: List[Expression] = []
         try:
-            if self._is_at_end():
-                self._error(None, 'no token')
-            expr = self._parse_recursive()
-            if not self._is_at_end():
-                self._error(self.tokens[self.current], 'excessive tokens')
+            while not self._is_at_end():
+                expr = self._parse_recursive()
+                expr_list.append(expr)
         except ParserError as err:
             scheme_panic(str(err))
-        return expr
+        return expr_list
 
     def _restart(self, tokens: List[Token]):
         self.tokens = tokens
@@ -542,19 +533,22 @@ class Parser:
     def _error(self, token: Optional[Token], message: str):
         raise ParserError(token, message)
 
-# scheme value definitions
-#
-# value and experssion are very similar in Scheme
-# for example, a list can be both an object and an expression
-# but we still differentitate them, giving them different base class, because
-# undef, procedure and primitive only appears in value, not in expression
-# expression need to store token for debugging, value doesn't have to
-#
-# because of the differentiation, we have to implement quote
-# to convert expression to the "same" value
-#
-# empty list is represented as special nil expression
-# non-empty list is represented as pairs
+
+'''
+scheme value definitions
+
+value and experssion are very similar in Scheme
+for example, a list can be both an object and an expression
+but we still differentitate them, giving them different base class, because
+undef, procedure and primitive only appears in value, not in expression
+expression need to store token for debugging, value doesn't have to
+
+because of the differentiation, we have to implement quote
+to convert expression to the "same" value
+
+empty list is represented as special nil expression
+non-empty list is represented as pairs
+'''
 
 
 class SymbolVal(SchemeVal):
@@ -606,14 +600,15 @@ class ProcVal(SchemeVal):
 
 
 class ProcPlainVal(ProcVal):
-    def __init__(self, name: str, parameters: List[str], body: Expression):
+    '''A simple implementation of procedure, later we will have another representation'''
+
+    def __init__(self, name: str, parameters: List[str], body: List[Expression]):
         ProcVal.__init__(self, name, parameters)
         self.body = body
 
 
-# stringify value
-
 class ValueStringifier:
+    '''convert value to string'''
 
     # instance vars
     _rules: Dict[Type, Callable[[SchemeVal], str]]
@@ -639,10 +634,10 @@ class ValueStringifier:
         return sv.value
 
     def _stringify_string(self, sv: StringVal):
-        return '"%s"' % sv.value
+        return sv.value
 
     def _stringify_number(self, sv: NumberVal):
-        return stringify_float(sv.value)
+        return format_float(sv.value)
 
     def _stringify_boolean(self, sv: BooleanVal):
         return '#t' if sv.value else '#f'
@@ -670,9 +665,12 @@ class ValueStringifier:
     def _stringify_primitive(self, sv: PrimVal):
         return '[primitive %s]' % sv.name
 
-# we only need one ValueStringifier
-# so let's declare its instance
-# and wrap it in stringify_value
+
+'''
+we only need one ValueStringifier
+so let's declare its instance
+and wrap it in stringify_value
+'''
 
 
 _value_stringifier = ValueStringifier()
@@ -681,11 +679,13 @@ _value_stringifier = ValueStringifier()
 def stringify_value(sv: SchemeVal):
     return _value_stringifier.stringify(sv)
 
-# check whether two values are equal
-# defined according to scheme's equal? procedure
-
 
 class EqualityChecker:
+    '''
+    check whether two values are equal
+    defined according to scheme's equal? procedure
+    '''
+
     # instance vars
     _rules: Dict[Type, Callable[[SchemeVal, SchemeVal], bool]]
 
@@ -725,14 +725,18 @@ _equality_checker = EqualityChecker()
 def is_equal(x: SchemeVal, y: SchemeVal):
     return _equality_checker.check(x, y)
 
-# in scheme, the only thing not truthy is #f
-# except that everything is truthy, including 0, "", '(), <#undef>
+
+'''
+in scheme, the only thing not truthy is #f
+except that everything is truthy, including 0, "", '(), <#undef>
+'''
 
 
 def is_truthy(sv: SchemeVal):
     return type(sv) != BooleanVal or cast(BooleanVal, sv).value == True
 
-# utility functions for pair value
+
+'''utility functions for pair value'''
 
 
 def pair_from_list(sv_list: List[SchemeVal]):
@@ -750,10 +754,9 @@ def pair_length(sv: PairVal):
         head = head.right
     return count
 
-# quote expression to value
-
 
 class ExprQuoter:
+    '''quote convert expression to value'''
 
     # instance vars
     _rules: Dict[Type, Callable[[Expression], SchemeVal]]
@@ -795,9 +798,6 @@ def quote_expr(expr: Expression):
     return _expr_quoter.quote(expr)
 
 
-# scheme evaluator
-# correspond to chap 4.1.1
-
 class PrimError(Exception):
     def __init__(self, message):
         self.message = message
@@ -822,6 +822,8 @@ EvalFuncType = Callable[[Expression, Environment], SchemeVal]
 
 
 class Evaluator:
+    '''scheme evaluator, correspond to chap 4.1.1'''
+
     _list_rules: Dict[str, Callable[[Expression,
                                      Environment, EvalFuncType], SchemeVal]]
     _type_rules: Dict[Type, EvalFuncType]
@@ -836,9 +838,11 @@ class Evaluator:
             ListExpr: self._eval_list,  # type: ignore
         }
 
-    def evaluate(self, expr: Expression, env: Environment) -> SchemeVal:
+    def evaluate(self, expr_list: List[Expression], env: Environment) -> SchemeVal:
         try:
-            res = self._eval_recursive(expr, env)
+            res: SchemeVal = UndefVal()
+            for expr in expr_list:
+                res = self._eval_recursive(expr, env)
         except RuntimeError as err:
             scheme_panic(str(err))
         return res
@@ -880,9 +884,11 @@ class Evaluator:
         return self._eval_rule('call', expr, env)
 
 
-# evaluator rule definitions
-# we use reparse to extract information from list, see chap4.1.2
-# then use eval to calculate values
+'''
+evaluator rule definitions
+we use reparse to extract information from list, see chap4.1.2
+then use eval to calculate values
+'''
 
 
 def reparse_quote(expr: ListExpr):
@@ -922,7 +928,9 @@ def eval_call(expr: ListExpr, env: Environment, eval: EvalFuncType):
             raise RuntimeError(expr.token, '%s expect %d arguments, get %d' % (
                 operator.name, len(operator.parameters), len(operands)))
         new_env = env.extend(operator.parameters, operands)
-        return eval(operator.body, new_env)
+        for body_expr in operator.body:
+            res = eval(body_expr, new_env)
+        return res
     else:
         raise RuntimeError(
             expr.token, 'cannot call %s expression' % type(expr).__name__)
@@ -938,7 +946,7 @@ def reparse_set(expr: ListExpr):
 
 
 def eval_set(expr: ListExpr, env: Environment, eval: EvalFuncType):
-    # return the value just set
+    '''return the value just set'''
     symbol_name, initializer_expr = reparse_set(expr)
     intializer = eval(initializer_expr, env)
     try:
@@ -949,13 +957,15 @@ def eval_set(expr: ListExpr, env: Environment, eval: EvalFuncType):
 
 
 def reparse_define(expr: ListExpr):
-    if len(expr.expressions) != 3:
+    if len(expr.expressions) < 3:
         raise ReparseError(
-            expr.token, 'define should have 3 expressions, now %d' % len(expr.expressions))
+            expr.token, 'define should have at least 3 expressions, now %d' % len(expr.expressions))
     expr1 = expr.expressions[1]
-    expr2 = expr.expressions[2]
     if isinstance(expr1, SymbolExpr):  # define variable
         var_name = expr1
+        if len(expr.expressions) != 3:
+            raise ReparseError(
+                expr.token, 'define variable should have 3 expressions, now %d' % len(expr.expressions))
         return var_name, expr.expressions[2]
     elif isinstance(expr1, ListExpr):  # define procedure
         if len(expr1.expressions) == 0:
@@ -965,7 +975,7 @@ def reparse_define(expr: ListExpr):
         if isinstance(expr10, SymbolExpr):
             proc_name = expr10
             proc_para = expr1.expressions[1:]
-            proc_body = expr2
+            proc_body = expr.expressions[2:]
             if all([isinstance(p, SymbolExpr) for p in proc_para]):
                 return proc_name, cast(List[SymbolExpr], proc_para), proc_body
             else:
@@ -980,7 +990,7 @@ def reparse_define(expr: ListExpr):
 
 
 def eval_define(expr: ListExpr, env: Environment, eval: EvalFuncType):
-    # return the symbol defined
+    '''return the symbol defined'''
     reparsed = reparse_define(expr)
     if len(reparsed) == 2:  # define variable
         var_name, initializer_expr = cast(
@@ -990,7 +1000,7 @@ def eval_define(expr: ListExpr, env: Environment, eval: EvalFuncType):
         return SymbolVal(var_name.token.literal)
     else:  # define procedure
         proc_name, proc_para, proc_body = cast(
-            Tuple[SymbolExpr, List[SymbolExpr], Expression], reparsed)
+            Tuple[SymbolExpr, List[SymbolExpr], List[Expression]], reparsed)
         proc_obj = ProcPlainVal(proc_name.token.literal, [
                                 p.token.literal for p in proc_para], proc_body)
         env.define(proc_name.token.literal, proc_obj)
@@ -1008,7 +1018,7 @@ def reparse_if(expr: ListExpr):
 
 
 def eval_if(expr: ListExpr, env: Environment, eval: EvalFuncType):
-    # return the successful branch
+    '''return the successful branch'''
     pred_expr, then_expr, else_expr = reparse_if(expr)
     pred_val = eval(pred_expr, env)
     if is_truthy(pred_val):
@@ -1025,7 +1035,7 @@ def reparse_begin(expr: ListExpr):
 
 
 def eval_begin(expr: ListExpr, env: Environment, eval: EvalFuncType):
-    # return the last expression
+    '''return the last expression'''
     subexprs = reparse_begin(expr)
     for subexpr in subexprs[:-1]:
         eval(subexpr, env)
@@ -1033,14 +1043,13 @@ def eval_begin(expr: ListExpr, env: Environment, eval: EvalFuncType):
 
 
 def reparse_lambda(expr: ListExpr):
-    if len(expr.expressions) != 3:
+    if len(expr.expressions) < 3:
         raise ReparseError(
-            expr.token, 'lambda should have 3 expressions, now %d' % len(expr.expressions))
+            expr.token, 'lambda should have at least 3 expressions, now %d' % len(expr.expressions))
     expr1 = expr.expressions[1]
-    expr2 = expr.expressions[2]
     if isinstance(expr1, ListExpr):
         proc_para = expr1.expressions
-        proc_body = expr2
+        proc_body = expr.expressions[2:]
         if all([isinstance(p, SymbolExpr) for p in proc_para]):
             return cast(List[SymbolExpr], proc_para), proc_body
         else:
@@ -1052,14 +1061,63 @@ def reparse_lambda(expr: ListExpr):
 
 
 def eval_lambda(expr: ListExpr, env: Environment, eval: EvalFuncType):
-    # return the procedure itself
+    '''return the procedure itself'''
     proc_para, proc_body = reparse_lambda(expr)
     return ProcPlainVal('lambda', [p.token.literal for p in proc_para], proc_body)
 
 
-# primitive definitions
+def reparse_and(expr: ListExpr):
+    if len(expr.expressions) < 3:
+        raise ReparseError(
+            expr.token, 'and should have at least 3 expressions, now %d' % len(expr.expressions))
+    return expr.expressions[1:]
+
+
+def eval_and(expr: ListExpr, env: Environment, eval: EvalFuncType):
+    '''return the first false, otherwise the last'''
+    subexprs = reparse_and(expr)
+    for subexpr in subexprs:
+        res = eval(subexpr, env)
+        if not is_truthy(res):
+            return res
+    return res
+
+
+def reparse_or(expr: ListExpr):
+    if len(expr.expressions) < 3:
+        raise ReparseError(
+            expr.token, 'or should have at least 3 expressions, now %d' % len(expr.expressions))
+    return expr.expressions[1:]
+
+
+def eval_or(expr: ListExpr, env: Environment, eval: EvalFuncType):
+    '''return the first true, otherwise the last'''
+    subexprs = reparse_or(expr)
+    for subexpr in subexprs:
+        res = eval(subexpr, env)
+        if is_truthy(res):
+            return res
+    return res
+
+
+def reparse_not(expr: ListExpr):
+    if len(expr.expressions) != 2:
+        raise ReparseError(
+            expr.token, 'not should have 2 expressions, now %d' % len(expr.expressions))
+    return expr.expressions[1]
+
+
+def eval_not(expr: ListExpr, env: Environment, eval: EvalFuncType):
+    subexpr = reparse_not(expr)
+    res = eval(subexpr, env)
+    return BooleanVal(False) if is_truthy(res) else BooleanVal(True)
+
+
+'''primitive definitions'''
+
 
 def register_primitive(env: Environment, name: str, py_func: Callable):
+    '''add primitive to environment'''
     arity = len(inspect.getfullargspec(py_func).args)
     primitive = PrimVal(name, arity, py_func)
     env.define(name, primitive)
@@ -1140,7 +1198,8 @@ def prim_newline():
     return UndefVal()
 
 
-# create out custom environment and evaluator
+'''create our custom environment and evaluator'''
+
 
 def make_global_env():
     glbenv = Environment()
@@ -1172,19 +1231,24 @@ def make_evaluator():
         'define': eval_define,
         'if': eval_if,
         'begin': eval_begin,
-        'lambda': eval_lambda
+        'lambda': eval_lambda,
+        'and': eval_and,
+        'or': eval_or,
+        'not': eval_not
     }
     evaluator = Evaluator(list_rules)
     return evaluator
 
-# each test tries to execute the source code as much as possible
-# capture the output, panic and result
-# print them and compare to expected value
-
 
 def test_one(source: str, **kargs: str):
+    '''
+    each test tries to execute the source code as much as possible
+    capture the output, panic and result
+    print them and compare to expected value
+    '''
+
     # source
-    print('* source: %s' % source)
+    print('* source: %s' % source.strip())
     try:
         # scan
         scanner = Scanner()
@@ -1193,27 +1257,28 @@ def test_one(source: str, **kargs: str):
         print('* tokens: %s' % token_str)
         if 'tokens' in kargs:
             assert token_str == kargs['tokens']
-        if len(tokens):
-            # parse
-            parser = Parser()
-            expr = parser.parse(tokens)
-            expr_str = stringify_expr(expr) if expr else ''
-            print('* expression: %s' % expr_str)
-            if 'expression' in kargs:
-                assert expr_str == kargs['expression']
-            # evaluate
-            glbenv = make_global_env()
-            evaluator = make_evaluator()
-            result = evaluator.evaluate(expr, glbenv)
-            result_str = stringify_value(result)
-            output_str = scheme_flush()
-            if len(output_str):
-                print('* output: %s' % output_str)
-            if 'output' in kargs:
-                assert output_str == kargs['output']
-            print('* result: %s' % result_str)
-            if 'result' in kargs:
-                assert result_str == kargs['result']
+
+        # parse
+        parser = Parser()
+        expr_list = parser.parse(tokens)
+        expr_str = ' '.join([stringify_expr(expr) for expr in expr_list])
+        print('* expression: %s' % expr_str)
+        if 'expression' in kargs:
+            assert expr_str == kargs['expression']
+
+        # evaluate
+        glbenv = make_global_env()
+        evaluator = make_evaluator()
+        result = evaluator.evaluate(expr_list, glbenv)
+        result_str = stringify_value(result)
+        output_str = scheme_flush()
+        if len(output_str):
+            print('* output: %s' % output_str)
+        if 'output' in kargs:
+            assert output_str == kargs['output']
+        print('* result: %s' % result_str)
+        if 'result' in kargs:
+            assert result_str == kargs['result']
     except PanicError as err:
         # any kind of panic
         print('* panic: %s' % err.message)
@@ -1223,10 +1288,6 @@ def test_one(source: str, **kargs: str):
 
 
 def test_scan():
-    test_one(
-        '',
-        tokens=''
-    )
     test_one(
         '(if #true 1 2)',
         panic='scanner error in line 1: invalid boolean: #true'
@@ -1239,9 +1300,18 @@ def test_scan():
         '(display\n"abc)',
         panic='scanner error in line 2: unterminated string: "abc)'
     )
+    test_one(
+        '\' (1 2)',
+        panic='scanner error in line 1: quote should not be followed by space'
+    )
 
 
 def test_parse():
+    test_one(
+        '',
+        tokens='',
+        expression=''
+    )
     test_one(
         '(display\n"abc"',
         tokens='LEFT_PAREN, SYMBOL:display, STRING:abc',
@@ -1251,14 +1321,8 @@ def test_parse():
         '(display\n"abc")',
         tokens='LEFT_PAREN, SYMBOL:display, STRING:abc, RIGHT_PAREN',
         expression='(display "abc")',
-        output='"abc"',
+        output='abc',
         result='#<undef>'
-    )
-    test_one(
-        '(+ 1 2.5)',
-        tokens='LEFT_PAREN, SYMBOL:+, NUMBER:1, NUMBER:2.500, RIGHT_PAREN',
-        expression='(+ 1 2.500)',
-        result='3.500'
     )
     test_one(
         '\'(a (b c))',
@@ -1266,11 +1330,111 @@ def test_parse():
         expression='(quote (a (b c)))',
         result='(a (b c))'
     )
+    test_one(
+        '(define a 1)\n(set! a 2)',
+        expression='(define a 1) (set! a 2)',
+        result='2'
+    )
+
+
+def test_reparse():
+    test_one(
+        '(begin)',
+        panic='runtime error at LEFT_PAREN in line 1: begin should have at least 2 expressions, now 1'
+    )
+    test_one(
+        '(if 0 1 2 3)',
+        panic='runtime error at LEFT_PAREN in line 1: if should have 4 expressions, now 5'
+    )
+    test_one(
+        '(define ("a" "b") 3)',
+        panic='runtime error at LEFT_PAREN in line 1: define procedure should use symbolic name, now StringExpr'
+    )
+
+
+def test_env():
+    test_one(
+        '((lambda (a) (+ x 1)) 2)',
+        panic='runtime error at SYMBOL:x in line 1: x not defined'
+    )
+
+
+def test_eval():
+    test_one(
+        '(+ (* 3 5) (- 10 6))',
+        result='19'
+    )
+    test_one(
+        '''
+        (define (square x) (* x x))
+        (define (sum-of-squares x y) (+ (square x) (square y)))
+        (sum-of-squares 3 4)
+        ''',
+        result='25'
+    )
+    test_one(
+        '((lambda (x y) (or (> x y) (= x y))) 1 2)',
+        result='#f'
+    )
+    test_one(
+        '''
+        (define (factorial n)
+          (if (= n 1)
+            1
+            (* n (factorial (- n 1)))))
+        (factorial 5)
+        ''',
+        result='120'
+    )
+    test_one(
+        '''
+        (define (factorial n)
+          (define (fact-iter product counter)
+            (if (> counter n)
+               product
+               (fact-iter (* counter product)
+                 (+ counter 1))))
+          (fact-iter 1 1))
+        (factorial 5)
+        ''',
+        result='120'
+    )
+    test_one(
+        '(begin (+ 1 2) (* 3 4))',
+        result='12'
+    )
+    test_one(
+        '''
+        (define a 1)
+        (define (incr)
+          (set! a (+ a 1)))
+        (incr)
+        (incr)
+        ''',
+        result='3'
+    )
+    test_one(
+        '''
+        (define a '(2 3 4))
+        (define b (cons 1 a))
+        (display (car b))
+        (newline)
+        (display (cdr b))
+        (newline)
+        (display (cdr (cdr b)))
+        (length b)
+        ''',
+        output='1\n(2 3 4)\n(3 4)',
+        result='4'
+    )
 
 
 def test():
     test_scan()
     test_parse()
+    test_reparse()
+    test_env()
+    test_eval()
 
 
 if __name__ == '__main__':
