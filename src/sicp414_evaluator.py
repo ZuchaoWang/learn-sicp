@@ -899,7 +899,7 @@ def reparse_quote(expr: ListExpr):
     return expr.expressions[1]
 
 
-def eval_quote(expr: ListExpr, env: Environment, eval: EvalFuncType):
+def eval_quote(expr: ListExpr, env: Environment, evl: EvalFuncType):
     content = reparse_quote(expr)
     return quote_expr(content)
 
@@ -912,29 +912,39 @@ def reparse_call(expr: ListExpr):
     return operator_expr, operand_exprs
 
 
-def eval_call(expr: ListExpr, env: Environment, eval: EvalFuncType):
+def pure_eval_call_prim(expr: ListExpr, operator: PrimVal, operands: List[SchemeVal]):
+    if operator.arity != len(operands):
+        raise SchemeRuntimeError(expr.token, '%s expect %d arguments, get %d' % (
+            operator.name, operator.arity, len(operands)))
+    try:
+        return operator.body(*operands)
+    except SchemePrimError as err:
+        raise SchemeRuntimeError(expr.token, err.message)
+
+def pure_eval_call_proc_plain(expr: ListExpr, operator: ProcPlainVal, operands: List[SchemeVal], evl: EvalFuncType):
+    if len(operator.parameters) != len(operands):
+        raise SchemeRuntimeError(expr.token, '%s expect %d arguments, get %d' % (
+            operator.name, len(operator.parameters), len(operands)))
+    new_env = env_extend(operator.env, operator.parameters, operands)
+    for body_expr in operator.body:
+        res = evl(body_expr, new_env)
+    return res
+
+def pure_eval_call_invalid(expr: ListExpr, operator: SchemeVal):
+    raise SchemeRuntimeError(
+        expr.token, 'cannot call %s value' % type(operator).__name__) 
+
+
+def eval_call(expr: ListExpr, env: Environment, evl: EvalFuncType):
     operator_expr, operand_exprs = reparse_call(expr)
-    operator = eval(operator_expr, env)
-    operands = [eval(subexpr, env) for subexpr in operand_exprs]
+    operator = evl(operator_expr, env)
+    operands = [evl(subexpr, env) for subexpr in operand_exprs]
     if isinstance(operator, PrimVal):
-        if operator.arity != len(operands):
-            raise SchemeRuntimeError(expr.token, '%s expect %d arguments, get %d' % (
-                operator.name, operator.arity, len(operands)))
-        try:
-            return operator.body(*operands)
-        except SchemePrimError as err:
-            raise SchemeRuntimeError(expr.token, err.message)
+        return pure_eval_call_prim(expr, operator, operands)
     elif isinstance(operator, ProcPlainVal):
-        if len(operator.parameters) != len(operands):
-            raise SchemeRuntimeError(expr.token, '%s expect %d arguments, get %d' % (
-                operator.name, len(operator.parameters), len(operands)))
-        new_env = env_extend(operator.env, operator.parameters, operands)
-        for body_expr in operator.body:
-            res = eval(body_expr, new_env)
-        return res
+        return pure_eval_call_proc_plain(expr, operator, operands, evl)
     else:
-        raise SchemeRuntimeError(
-            expr.token, 'cannot call %s value' % type(operator).__name__)
+        return pure_eval_call_invalid(expr, operator)
 
 
 def reparse_set(expr: ListExpr):
@@ -946,10 +956,10 @@ def reparse_set(expr: ListExpr):
     return name_expr, initializer_expr
 
 
-def eval_set(expr: ListExpr, env: Environment, eval: EvalFuncType):
+def eval_set(expr: ListExpr, env: Environment, evl: EvalFuncType):
     '''return the value just set'''
     name_expr, initializer_expr = reparse_set(expr)
-    intializer = eval(initializer_expr, env)
+    intializer = evl(initializer_expr, env)
     try:
         env_set(env, name_expr.token.literal, intializer)
         return intializer
@@ -990,13 +1000,13 @@ def reparse_define(expr: ListExpr):
             expr.token, 'define 2nd expression should be symbol or list, now %s' % type(expr1).__name__)
 
 
-def eval_define(expr: ListExpr, env: Environment, eval: EvalFuncType):
+def eval_define(expr: ListExpr, env: Environment, evl: EvalFuncType):
     '''return the symbol defined'''
     reparsed = reparse_define(expr)
     if len(reparsed) == 2:  # define variable
         name_expr, initializer_expr = cast(
             Tuple[SymbolExpr, Expression], reparsed)
-        intializer = eval(initializer_expr, env)
+        intializer = evl(initializer_expr, env)
         env_define(env, name_expr.token.literal, intializer)
         return SymbolVal(name_expr.token.literal)
     else:  # define procedure
@@ -1018,14 +1028,14 @@ def reparse_if(expr: ListExpr):
     return pred_expr, then_expr, else_expr
 
 
-def eval_if(expr: ListExpr, env: Environment, eval: EvalFuncType):
+def eval_if(expr: ListExpr, env: Environment, evl: EvalFuncType):
     '''return the successful branch'''
     pred_expr, then_expr, else_expr = reparse_if(expr)
-    pred_val = eval(pred_expr, env)
+    pred_val = evl(pred_expr, env)
     if is_truthy(pred_val):
-        return eval(then_expr, env)
+        return evl(then_expr, env)
     else:
-        return eval(else_expr, env)
+        return evl(else_expr, env)
 
 
 def reparse_begin(expr: ListExpr):
@@ -1035,12 +1045,12 @@ def reparse_begin(expr: ListExpr):
     return expr.expressions[1:]
 
 
-def eval_begin(expr: ListExpr, env: Environment, eval: EvalFuncType):
+def eval_begin(expr: ListExpr, env: Environment, evl: EvalFuncType):
     '''return the last expression'''
     subexprs = reparse_begin(expr)
     for subexpr in subexprs[:-1]:
-        eval(subexpr, env)
-    return eval(subexprs[-1], env)
+        evl(subexpr, env)
+    return evl(subexprs[-1], env)
 
 
 def reparse_lambda(expr: ListExpr):
@@ -1061,7 +1071,7 @@ def reparse_lambda(expr: ListExpr):
             expr.token, 'lambda 2nd expression should be list, now %s' % type(expr1).__name__)
 
 
-def eval_lambda(expr: ListExpr, env: Environment, eval: EvalFuncType):
+def eval_lambda(expr: ListExpr, env: Environment, evl: EvalFuncType):
     '''return the procedure itself'''
     para_exprs, body_exprs = reparse_lambda(expr)
     return ProcPlainVal('lambda', [p.token.literal for p in para_exprs], body_exprs, env)
@@ -1074,11 +1084,11 @@ def reparse_and(expr: ListExpr):
     return expr.expressions[1:]
 
 
-def eval_and(expr: ListExpr, env: Environment, eval: EvalFuncType):
+def eval_and(expr: ListExpr, env: Environment, evl: EvalFuncType):
     '''return the first false, otherwise the last'''
     subexprs = reparse_and(expr)
     for subexpr in subexprs:
-        res = eval(subexpr, env)
+        res = evl(subexpr, env)
         if not is_truthy(res):
             return res
     return res
@@ -1091,11 +1101,11 @@ def reparse_or(expr: ListExpr):
     return expr.expressions[1:]
 
 
-def eval_or(expr: ListExpr, env: Environment, eval: EvalFuncType):
+def eval_or(expr: ListExpr, env: Environment, evl: EvalFuncType):
     '''return the first true, otherwise the last'''
     subexprs = reparse_or(expr)
     for subexpr in subexprs:
-        res = eval(subexpr, env)
+        res = evl(subexpr, env)
         if is_truthy(res):
             return res
     return res
@@ -1108,9 +1118,9 @@ def reparse_not(expr: ListExpr):
     return expr.expressions[1]
 
 
-def eval_not(expr: ListExpr, env: Environment, eval: EvalFuncType):
+def eval_not(expr: ListExpr, env: Environment, evl: EvalFuncType):
     subexpr = reparse_not(expr)
-    res = eval(subexpr, env)
+    res = evl(subexpr, env)
     return BooleanVal(False) if is_truthy(res) else BooleanVal(True)
 
 

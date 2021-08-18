@@ -376,6 +376,13 @@ def env_lookup_at(env: Environment, distance: int, name: str):
         raise SchemeEnvError('%s not defined' % name)
 
 
+def pure_resolved_eval_symbol(expr: SymbolExpr, env: Environment, distances: ResolveDistancesType):
+    try:
+        return env_lookup_at(env, distances[expr], expr.token.literal)
+    except SchemeEnvError as err:
+        raise SchemeRuntimeError(expr.token, err.message)
+
+
 class ResolvedEvaluator:
     '''
     redefined scheme evaluator that takes resolution distance
@@ -410,20 +417,16 @@ class ResolvedEvaluator:
             for expr in expr_list:
                 res = self._eval_recursive(expr, env)
         except SchemeRuntimeError as err:
-            x = str(err)
             scheme_panic(str(err))
         self._distances = {}
         return res
 
-    def _eval_recursive(self, expr: Expression, env: Environment) -> SchemeVal:
+    def _eval_recursive(self, expr: Expression, env: Environment):
         f = self._type_rules[type(expr)]
         return f(expr, env)
 
     def _eval_symbol(self, expr: SymbolExpr, env: Environment):
-        try:
-            return env_lookup_at(env, self._distances[expr], expr.token.literal)
-        except SchemeEnvError as err:
-            raise SchemeRuntimeError(expr.token, err.message)
+        return pure_resolved_eval_symbol(expr, env, self._distances)
 
     def _eval_string(self, expr: StringExpr, env: Environment):
         return StringVal(expr.token.literal)
@@ -443,7 +446,7 @@ class ResolvedEvaluator:
                 return self._eval_list_rule(symbol_name, expr, env)
         return self._eval_list_rule('call', expr, env)
 
-    def _eval_list_rule(self, rule_name: str, expr: ListExpr, env: Environment) -> SchemeVal:
+    def _eval_list_rule(self, rule_name: str, expr: ListExpr, env: Environment):
         try:
             f = self._list_rules[rule_name]
             res = f(expr, env, self._eval_recursive, self._distances)
@@ -464,8 +467,8 @@ ResolvedEvalListRuleFunc = Union[
 def resolved_eval_list_rule_decorator(rule_func: ResolvedEvalListRuleFunc):
     arity = len(inspect.getfullargspec(rule_func).args)
 
-    def _resolved_eval_list_rule_wrapped(expr: ListExpr, env: Environment, eval: EvalFuncType, distances: ResolveDistancesType):
-        args: List[Any] = [expr, env, eval, distances]
+    def _resolved_eval_list_rule_wrapped(expr: ListExpr, env: Environment, evl: EvalFuncType, distances: ResolveDistancesType):
+        args: List[Any] = [expr, env, evl, distances]
         return rule_func(*args[0:arity])
     return _resolved_eval_list_rule_wrapped
 

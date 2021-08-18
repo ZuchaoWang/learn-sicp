@@ -4,59 +4,135 @@
 # see 4.1.7
 
 
-AnalyzeRetType = Callable[[Environment], Expression]
-AnalyzeType = Callable[[Optional[Expression]], AnalyzeRetType]
-AnalyzeConfigType = Callable[[Environment, AnalyzeType], AnalyzeRetType]
+import inspect
+from typing import Any, Callable, Dict, List, Type, Union, cast
+
+from sicp414_evaluator import BooleanExpr, BooleanVal, Environment, Expression, ListExpr, NilVal, NumberExpr, NumberVal, ProcVal, SchemeEnvError, SchemeReparseError, SchemeRuntimeError, SchemeVal, UndefVal, StringExpr, StringVal, SymbolExpr, Token, quote_expr, reparse_call, reparse_quote, scheme_panic, stringify_token
+from sicp416_resolver import ResolveDistancesType, env_lookup_at, pure_resolved_eval_symbol
+
+
+class SchemeAnalysisError(Exception):
+    def __init__(self, token: Token, message: str):
+        self.token = token
+        self.message = message
+
+    def __str__(self):
+        return 'analysis error at %s in line %d: %s' % (stringify_token(self.token), self.token.line+1, self.message)
+
+
+EvaluableType = Callable[[Environment], SchemeVal]
+AnalyzeFuncType = Callable[[Expression, ResolveDistancesType], EvaluableType]
 
 
 class Analyzer:
-    def __init__(self, special_forms: Dict[str, AnalyzeConfigType], application: AnalyzeConfigType, symbol: AnalyzeConfigType):
-        self._special_forms = special_forms
-        self._application = application
-        self._symbol = symbol
 
-    def analyze(self, expr: Optional[Expression]) -> AnalyzeRetType:
-        if expr is not None:
-            if expr.tag == NUMBER or expr.tag == STRING:
-                return lambda _: expr
-            elif expr.tag == SYMBOL:
-                return self.analyze_symbol(expr)
-            else:  # must be list
-                return self.analyze_list(expr)
+    _type_rules: Dict[Type, AnalyzeFuncType]
+    _list_rules: Dict[str, Callable[[
+        ListExpr, ResolveDistancesType, AnalyzeFuncType], EvaluableType]]
 
-    def analyze_symbol(self, expr: Expression):
-        return self._symbol(expr, self.analyze)
+    def __init__(self, list_rules):
+        self._type_rules = {
+            SymbolExpr: self._analyze_symbol,
+            StringExpr: self._analyze_string,
+            NumberExpr: self._analyze_number,
+            BooleanExpr: self._analyze_boolean,
+            ListExpr: self._analyze_list,
+        }
+        self._list_rules = list_rules
 
-    def analyze_list(self, expr: Expression):
-        head: Optional[LinkedList] = expr.value
-        if head is None:  # empty list
-            panic('analyzer: cannot evaluate empty list')
-        else:
-            hexpr = head.expr
-            if hexpr.tag == NUMBER:
-                panic('analyzer: number cannot be operator or special form')
-            if hexpr.tag == STRING:
-                panic('analyzer: string cannot be operator or special form')
-            if hexpr.tag == SYMBOL:
-                f = self._special_forms.get(hexpr.value, None)
-                if f is not None:
-                    return f(expr, self.analyze)
-            return self._application(expr, self.analyze)
+    def analyze(self, expr_list: List[Expression], distances: ResolveDistancesType) -> EvaluableType:
+        try:
+            evls: List[EvaluableType] = []
+            for expr in expr_list:
+                evl = self._analyze_recursive(expr, distances)
+                evls.append(evl)
+
+            def _evaluate(env: Environment):
+                try:
+                    res: SchemeVal = UndefVal()
+                    for evl in evls:
+                        res = evl(env)
+                except SchemeRuntimeError as err:
+                    scheme_panic(str(err))
+                return res
+        except SchemeAnalysisError as err:
+            scheme_panic(str(err))
+        return _evaluate
+
+    def _analyze_recursive(self, expr: Expression, distances: ResolveDistancesType):
+        f = self._type_rules[type(expr)]
+        return f(expr, distances)
+
+    def _analyze_symbol(self, expr: SymbolExpr, distances: ResolveDistancesType):
+        def _evaluate(env: Environment):
+            return pure_resolved_eval_symbol(expr, env, distances)
+        return _evaluate
+
+    def _analyze_string(self, expr: StringExpr, distances: ResolveDistancesType):
+        return lambda env: StringVal(expr.token.literal)
+
+    def _analyze_number(self, expr: NumberExpr, distances: ResolveDistancesType):
+        return lambda env: NumberVal(expr.token.literal)
+
+    def _analyze_boolean(self, expr: BooleanExpr, distances: ResolveDistancesType):
+        return lambda env: BooleanVal(expr.token.literal)
+
+    def _analyze_list(self, expr: ListExpr, distances: ResolveDistancesType):
+        if len(expr.expressions) == 0:
+            return lambda env: NilVal()
+        elif type(expr.expressions[0]) == SymbolExpr:
+            symbol_name = cast(SymbolExpr, expr.expressions[0]).token.literal
+            if symbol_name in self._list_rules:
+                return self._analyze_list_rule(symbol_name, expr, distances)
+        return self._analyze_list_rule('call', expr, distances)
+
+    def _analyze_list_rule(self, rule_name: str, expr: ListExpr, distances: ResolveDistancesType):
+        try:
+            f = self._list_rules[rule_name]
+            res = f(expr, distances, self._analyze_recursive)
+        except SchemeReparseError as err:
+            raise SchemeAnalysisError(err.token, err.message)
+        return res
+
+'''analyzed procedure value'''
+
+class ProcAnalyzedVal(ProcVal):
+    '''procedure body is a EvaluableType'''
+
+    def __init__(self, name: str, parameters: List[str], body: EvaluableType, env: Environment):
+        ProcVal.__init__(self, name, parameters, env)
+        self.body = body
+
+'''analysis list rule definitions'''
+
+AnalyzeListRuleFunc = Union[
+    Callable[[], EvaluableType],
+    Callable[[ListExpr], EvaluableType],
+    Callable[[ListExpr, ResolveDistancesType], EvaluableType],
+    Callable[[ListExpr, ResolveDistancesType, AnalyzeFuncType], EvaluableType]
+]
+
+def analyze_list_rule_decorator(rule_func: AnalyzeListRuleFunc):
+    arity = len(inspect.getfullargspec(rule_func).args)
+
+    def _analyze_list_rule_wrapped(expr: ListExpr, distances: ResolveDistancesType, analyze: AnalyzeFuncType):
+        args: List[Any] = [expr, distances, analyze]
+        rule_func(*args[0:arity])
+    return _analyze_list_rule_wrapped
 
 
-def analyze_symbol(expr: Expression, _analyze: AnalyzeType) -> AnalyzeRetType:
-    '''lookup variable'''
-    name = expr.value
-    return lambda env: env.lookup(name)
+@analyze_list_rule_decorator
+def analyze_quote(expr: ListExpr):
+    content = reparse_quote(expr)
+    return lambda env: quote_expr(content)
 
 
-def analyze_quote(expr: Expression, _analyze: AnalyzeType) -> AnalyzeRetType:
-    head: LinkedList = expr.value
-    if head.length() == 2:
-        quoted = head.next.expr
-        return lambda _: quoted
-    else:
-        panic('analyze_quote: list length should be 2')
+@analyze_list_rule_decorator
+def analyze_call(expr: ListExpr, distances: ResolveDistancesType, analyze: AnalyzeFuncType):
+    operator_expr, operand_exprs = reparse_call(expr)
+    operator_evl = analyze(operator_expr, distances)
+    operand_evls = [analyze(subexpr, distances) for subexpr in operand_exprs]
+    def _evaluate
 
 
 def analyze_set(expr: Expression, analyze: AnalyzeType) -> AnalyzeRetType:
