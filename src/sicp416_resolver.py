@@ -6,6 +6,10 @@ we discover bad internal definitions at compile time, using static analysis, fol
 during the static analysis we also resolve the scope for each symbol, record them as distance, i.e. link_count of environment chain
 to use the distance information, we extend environment supports: env_set_at and env_lookup_at
 we also modify evaluator to use env_set_at and env_lookup_at, for symbol expression and set! expression
+
+our resolver allows "function usage before definition" and "mutual recursion" only in global scope
+such usage in local scope will be considered as "usage before initialization" error
+however, local scope do support single recursion
 '''
 
 import inspect
@@ -275,9 +279,10 @@ def resolve_define(expr: ListExpr, phase: bool, resolve: ResolveFuncType, stack:
         name_expr, para_exprs, body_exprs = cast(
             Tuple[SymbolExpr, List[SymbolExpr], List[Expression]], reparsed)
         # resolve procedure parameters and body at definition time
+        # define procedure name eagerly, so that it can be used inside procedure body
+        resolve_symbol_define(name_expr, phase, stack, bindings)
         resolve_proc_define(expr, para_exprs, body_exprs,
                             phase, resolve, stack, bindings)
-        resolve_symbol_define(name_expr, phase, stack, bindings)
 
 
 @resolve_list_rule_decorator
@@ -490,6 +495,7 @@ def resolved_eval_set(expr: ListExpr, env: Environment, eval: EvalFuncType, dist
 
 
 def make_resolved_evaluator():
+    '''make custom resolved evaluator, using list rules'''
     list_rules = {
         'quote': resolved_eval_quote,
         'call': resolved_eval_call,
@@ -557,6 +563,7 @@ def test_one(source: str, **kargs: str):
 
 
 def test():
+    # use before intialization
     test_one(
         '''
         (define x 1)
@@ -568,6 +575,7 @@ def test():
         ''',
         panic='resolution error at SYMBOL:x in line 3: symbol used before initialization'
     )
+    # self initialization forbidden
     test_one(
         '''
         (define x 1)
@@ -578,17 +586,7 @@ def test():
         ''',
         panic='resolution error at SYMBOL:x in line 3: symbol used before initialization'
     )
-    test_one(
-        '''
-        (define x 1)
-        (define (f)
-          (define (g) (x))
-          (define x 2)
-          g)
-        ((f))
-        ''',
-        panic='resolution error at SYMBOL:x in line 3: symbol used before initialization'
-    )
+    # local redefinition is forbidden
     test_one(
         '''
         (define (f)
@@ -599,6 +597,7 @@ def test():
         ''',
         panic='resolution error at SYMBOL:x in line 3: symbol redefinition'
     )
+    # global redefinition is ok
     test_one(
         '''
         (define x 1)
@@ -608,6 +607,7 @@ def test():
         resolve='(3:x 0)',
         result='2'
     )
+    # undefined global variable pass resolution
     test_one(
         '''
         (define x 1)
@@ -617,6 +617,7 @@ def test():
         resolve='(2:+ 0) (2:x 0) (2:x 0) (3:f 0)',
         panic='runtime error at SYMBOL:f in line 3: f not defined'
     )
+    # local variable shadows outer definitions
     test_one(
         '''
         (define x 1)
@@ -628,6 +629,7 @@ def test():
         resolve='(4:x 0) (5:f 0)',
         result='2'
     )
+    # two level scopes, lambda and set
     test_one(
         '''
         (define x 1)
@@ -642,6 +644,7 @@ def test():
         resolve='(6:x 2) (7:+ 2) (7:x 2) (7:+ 2) (7:y 1) (7:z 0) (8:f 0)',
         result='14'
     )
+    # if, begin and set
     test_one(
         '''
         (define x 1)
@@ -652,16 +655,40 @@ def test():
         resolve='(3:= 1) (3:x 1) (3:x 1) (3:x 1) (3:x 1) (4:f 0)',
         result='2'
     )
+    # single recursion ok, due to eager procedure definition
     test_one(
         '''
-        (define (factorial n)
-          (if (= n 1)
-            1
-            (* n (factorial (- n 1)))))
-        (factorial 5)
+        (define (run)
+          (define (factorial n)
+            (if (= n 1)
+              1
+              (* n (factorial (- n 1)))))
+          (factorial 5))
+        (run)
         ''',
-        resolve='(2:= 1) (2:n 0) (4:* 1) (4:n 0) (4:factorial 1) (4:- 1) (4:n 0) (5:factorial 0)',
+        resolve='(3:= 2) (3:n 0) (5:* 2) (5:n 0) (5:factorial 1) (5:- 2) (5:n 0) (6:factorial 0) (7:run 0)',
         result='120'
+    )
+    # mutual recursion allowed in global scope
+    test_one(
+        '''
+        (define (even n) (if (= n 0) #t (odd (- n 1))))
+        (define (odd n) (if (= n 0) #f (even (- n 1))))
+        (even 5)
+        ''',
+        resolve='(1:= 1) (1:n 0) (1:odd 1) (1:- 1) (1:n 0) (2:= 1) (2:n 0) (2:even 1) (2:- 1) (2:n 0) (3:even 0)',
+        result='#f'
+    )
+    # mutual recursion not allowed in local scope
+    test_one(
+        '''
+        (define (f)
+          (define (even n) (if (= n 0) #t (odd (- n 1))))
+          (define (odd n) (if (= n 0) #f (even (- n 1))))
+          (even 5))
+        (f)
+        ''',
+        panic='resolution error at SYMBOL:odd in line 2: symbol used before initialization'
     )
 
 
