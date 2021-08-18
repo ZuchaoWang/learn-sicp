@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Tuple
 
 
 class Constraint:
@@ -55,7 +55,7 @@ class User(Constraint):
 
 
 class Probe(Constraint):
-    events = []
+    events: List[Tuple[str, str]] = []
 
     def __init__(self, name: str, connector: Connector):
         self.name = name

@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from typing import Callable, Optional, cast
 
 
 class Stream:
@@ -21,7 +21,7 @@ class Stream:
         if self.next_cached is False:
             self.next_cached = True
             self.next_cached_value = self.gen_next()
-        return self.next_cached_value
+        return cast(Stream, self.next_cached_value)
 
     def nth_value(self, n: int):
         s = self

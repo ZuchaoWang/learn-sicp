@@ -1,4 +1,7 @@
+from typing import Callable, Dict
+
 # basic expr
+
 def is_number(y):
     return isinstance(y, (int, float))
 
@@ -13,7 +16,7 @@ def is_same_variable(y1, y2):
 
 # lookup table
 # (sum | product) => (make | diff | stringify_expr) => func
-table = {}
+table: Dict[str, Dict[str, Callable]] = {}
 
 
 def extract_data(y):

@@ -1,7 +1,9 @@
+from typing import Callable, Dict, Tuple
+
 # lookup table
 
-op_table = {}
-cv_table = {}
+op_table: Dict[Tuple, Callable] = {}
+cv_table: Dict[Tuple, Callable] = {}
 
 
 def add_type(type, data):
@@ -339,12 +341,14 @@ def test():
     test_one('sum',
              make('polynomial', 'x', [
                   (3, 3), (1, make('complex', 2, 3)), (0, 7)]),  # 3*x^3+(2+3i)x+7
-             make('polynomial', 'x', [(2, make('complex', 5, 2)), (1, -2)]), # (5+2i)*x^2-2x
+             # (5+2i)*x^2-2x
+             make('polynomial', 'x', [(2, make('complex', 5, 2)), (1, -2)]),
              '3*x^3+(5+2*i)*x^2+(3*i)*x+7')
     test_one('product',
              make('polynomial', 'x', [
                   (3, 3), (1, make('complex', 2, 3)), (0, 7)]),  # 3*x^3+(2+3i)x+7
-             make('polynomial', 'x', [(2, make('complex', 5, 2)), (1, -2)]), # (5+2i)*x^2-2x
+             # (5+2i)*x^2-2x
+             make('polynomial', 'x', [(2, make('complex', 5, 2)), (1, -2)]),
              '(15+6*i)*x^5+(-6)*x^4+(4+19*i)*x^3+(31+8*i)*x^2+(-14)*x')
     # polynomial and real
     test_one('sum',

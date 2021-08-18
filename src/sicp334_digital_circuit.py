@@ -1,4 +1,5 @@
 import heapq
+from typing import Callable, List, Tuple
 
 
 class Wire:
@@ -24,10 +25,10 @@ class Agenda:
     '''simulator, controlling time events'''
     t = 0
     seq_num = 0
-    queue = []
+    queue: List[Tuple[int, int, Callable]] = []
 
     @classmethod
-    def run_later(cls, delay: int, h):
+    def run_later(cls, delay: int, h: Callable):
         assert delay > 0
         next_time = cls.t + delay
         heapq.heappush(cls.queue, (next_time, cls.seq_num, h))
