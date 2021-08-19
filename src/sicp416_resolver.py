@@ -103,7 +103,7 @@ def resolve_symbol_distance(expr: SymbolExpr, stack: ResolveStackType, bindings:
         if symbol_name in scope_bindings:
             if scope_bindings[symbol_name] == False and i == len(stack)-1:
                 # if usage before initialization and in current local scope, generate error
-                raise SchemeResError(expr.token, 'symbol used before initialization')
+                raise SchemeResError(expr.token, 'local symbol used before initialization')
             else:
                 # either absolutely ok with True, or to be checked at runtime with i < len(stack)-1
                 # skip static check to allow "symbol used in function body before definition" and "mutual recursion"
@@ -396,7 +396,7 @@ def env_lookup_at(env: Environment, distance: int, name: str):
 
 
 def pure_resolved_eval_env_error(expr: SymbolExpr, env: Environment):
-    message = 'local symbol usage before initialization' if env.enclosing else 'global symbol undefined'
+    message = 'local symbol used before initialization' if env.enclosing else 'global symbol undefined'
     raise SchemeRuntimeError(expr.token, message)
 
 
@@ -599,7 +599,7 @@ def test():
           y)
         (f)
         ''',
-        panic='resolution error at SYMBOL:x in line 3: symbol used before initialization'
+        panic='resolution error at SYMBOL:x in line 3: local symbol used before initialization'
     )
     # use before intialization in different scopes pass resolution
     test_one(
@@ -633,7 +633,7 @@ def test():
           (define x 1))
         (f)
         ''',
-        panic='runtime error at SYMBOL:x in line 2: local symbol usage before initialization'
+        panic='runtime error at SYMBOL:x in line 2: local symbol used before initialization'
     )
     # self initialization forbidden
     test_one(
@@ -644,7 +644,7 @@ def test():
           x)
         (f)
         ''',
-        panic='resolution error at SYMBOL:x in line 3: symbol used before initialization'
+        panic='resolution error at SYMBOL:x in line 3: local symbol used before initialization'
     )
     # undefined global variable pass resolution
     test_one(
