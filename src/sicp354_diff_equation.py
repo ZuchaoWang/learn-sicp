@@ -13,9 +13,7 @@
 
 import math
 from typing import Callable
-import sicp352_prime_number
-
-Stream = sicp352_prime_number.Stream
+from sicp352_prime_number import Stream
 
 
 def solve(f: Callable[[float], float], y0: float, dt: float):

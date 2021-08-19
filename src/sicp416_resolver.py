@@ -31,52 +31,16 @@ we do not move definition to front of scope, such as JavaScript's hoisting
 
 import inspect
 from typing import Any, Callable, Dict, List, Tuple, Type, Union, cast
-import sicp414_evaluator
 
-BooleanExpr = sicp414_evaluator.BooleanExpr
-BooleanVal = sicp414_evaluator.BooleanVal
-Environment = sicp414_evaluator.Environment
-EvalFuncType = sicp414_evaluator.EvalFuncType
-Expression = sicp414_evaluator.Expression
-ListExpr = sicp414_evaluator.ListExpr
-NilVal = sicp414_evaluator.NilVal
-NumberExpr = sicp414_evaluator.NumberExpr
-NumberVal = sicp414_evaluator.NumberVal
-Parser = sicp414_evaluator.Parser
-SchemeEnvError = sicp414_evaluator.SchemeEnvError
-SchemePanic = sicp414_evaluator.SchemePanic
-SchemeReparseError = sicp414_evaluator.SchemeReparseError
-SchemeRuntimeError = sicp414_evaluator.SchemeRuntimeError
-Scanner = sicp414_evaluator.Scanner
-SchemeVal = sicp414_evaluator.SchemeVal
-StringExpr = sicp414_evaluator.StringExpr
-StringVal = sicp414_evaluator.StringVal
-SymbolExpr = sicp414_evaluator.SymbolExpr
-Token = sicp414_evaluator.Token
-UndefVal = sicp414_evaluator.UndefVal
-eval_and = sicp414_evaluator.eval_and
-eval_begin = sicp414_evaluator.eval_begin
-eval_call = sicp414_evaluator.eval_call
-eval_define = sicp414_evaluator.eval_define
-eval_if = sicp414_evaluator.eval_if
-eval_lambda = sicp414_evaluator.eval_lambda
-eval_not = sicp414_evaluator.eval_not
-eval_or = sicp414_evaluator.eval_or
-eval_quote = sicp414_evaluator.eval_quote
-make_global_env = sicp414_evaluator.make_global_env
-reparse_and = sicp414_evaluator.reparse_and
-reparse_begin = sicp414_evaluator.reparse_begin
-reparse_call = sicp414_evaluator.reparse_call
-reparse_define = sicp414_evaluator.reparse_define
-reparse_if = sicp414_evaluator.reparse_if
-reparse_lambda = sicp414_evaluator.reparse_lambda
-reparse_not = sicp414_evaluator.reparse_not
-reparse_or = sicp414_evaluator.reparse_or
-reparse_set = sicp414_evaluator.reparse_set
-scheme_flush = sicp414_evaluator.scheme_flush
-scheme_panic = sicp414_evaluator.scheme_panic
-stringify_token = sicp414_evaluator.stringify_token
-stringify_value = sicp414_evaluator.stringify_value
+# cannot use relative import: from .sicp414_evaluator import blablabla ...
+# but can use absolute import below
+
+from sicp414_evaluator import BooleanExpr, BooleanVal, Environment, EvalFuncType, Expression, \
+    ListExpr, NilVal, NumberExpr, NumberVal, Parser, SchemeEnvError, SchemePanic, SchemeReparseError, SchemeRuntimeError, \
+    Scanner, SchemeVal, StringExpr, StringVal, SymbolExpr, Token, UndefVal, \
+    eval_and, eval_begin, eval_call, eval_define, eval_if, eval_lambda, eval_not, eval_or, eval_quote, make_global_env, \
+    reparse_and, reparse_begin, reparse_call, reparse_define, reparse_if, reparse_lambda, reparse_not, reparse_or, reparse_set, \
+    scheme_flush, scheme_panic, stringify_token, stringify_value
 
 
 class SchemeResError(Exception):
@@ -103,7 +67,8 @@ def resolve_symbol_distance(expr: SymbolExpr, stack: ResolveStackType, bindings:
         if symbol_name in scope_bindings:
             if scope_bindings[symbol_name] == False and i == len(stack)-1:
                 # if usage before initialization and in current local scope, generate error
-                raise SchemeResError(expr.token, 'local symbol used before initialization')
+                raise SchemeResError(
+                    expr.token, 'local symbol used before initialization')
             else:
                 # either absolutely ok with True, or to be checked at runtime with i < len(stack)-1
                 # skip static check to allow "symbol used in function body before definition" and "mutual recursion"
@@ -374,7 +339,8 @@ def make_resolver():
 def _env_ancestor(env: Environment, distance: int):
     cur = env
     while distance > 0:
-        cur = cast(Environment, cur.enclosing) # we trust the distance provided by resolver
+        # we trust the distance provided by resolver
+        cur = cast(Environment, cur.enclosing)
         distance -= 1
     return cur
 
@@ -508,17 +474,21 @@ resolved_eval_or = resolved_eval_list_rule_decorator(eval_or)
 resolved_eval_not = resolved_eval_list_rule_decorator(eval_not)
 
 
+def pure_resolved_eval_set(name_expr: SymbolExpr, initializer: SchemeVal, env: Environment, distances: ResolveDistancesType):
+    try:
+        env_set_at(env, distances[name_expr],
+                   name_expr.token.literal, initializer)
+        return initializer
+    except SchemeEnvError as err:
+        pure_resolved_eval_env_error(name_expr, err.env)
+
+
 @resolved_eval_list_rule_decorator
 def resolved_eval_set(expr: ListExpr, env: Environment, eval: EvalFuncType, distances: ResolveDistancesType):
     '''return the value just set'''
     name_expr, initializer_expr = reparse_set(expr)
-    intializer = eval(initializer_expr, env)
-    try:
-        env_set_at(env, distances[name_expr],
-                   name_expr.token.literal, intializer)
-        return intializer
-    except SchemeEnvError as err:
-        pure_resolved_eval_env_error(name_expr, err.env)
+    initializer = eval(initializer_expr, env)
+    return pure_resolved_eval_set(name_expr, initializer, env, distances)
 
 
 def make_resolved_evaluator():

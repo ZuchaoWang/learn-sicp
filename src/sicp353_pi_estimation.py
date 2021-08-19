@@ -1,7 +1,5 @@
 import math
-import sicp352_prime_number
-
-Stream = sicp352_prime_number.Stream
+from sicp352_prime_number import Stream
 
 
 def make_pi_summands():

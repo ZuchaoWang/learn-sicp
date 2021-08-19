@@ -3,9 +3,7 @@
 # and define operations on power series
 
 from typing import Callable, Tuple
-import sicp352_prime_number
-
-Stream = sicp352_prime_number.Stream
+from sicp352_prime_number import Stream
 
 
 def almost_equal(x: float, y: float):

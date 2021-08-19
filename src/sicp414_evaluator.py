@@ -12,7 +12,7 @@ finally all expression trees in the list are evaluated directly
 import sys
 import inspect
 import enum
-from typing import Any, Callable, ClassVar, Dict, List, Optional, Set, Tuple, Type, Union, cast
+from typing import Callable, ClassVar, Dict, List, Optional, Set, Tuple, Type, Union, cast
 
 
 '''basic formatting'''
@@ -829,6 +829,13 @@ class SchemeRuntimeError(Exception):
 EvalFuncType = Callable[[Expression, Environment], SchemeVal]
 
 
+def pure_eval_sequence(expr_list: List[Expression], env: Environment, evl: EvalFuncType):
+    res: SchemeVal = UndefVal()
+    for expr in expr_list:
+        res = evl(expr, env)
+    return res
+
+
 class Evaluator:
     '''scheme evaluator, correspond to chap 4.1.1'''
 
@@ -848,9 +855,7 @@ class Evaluator:
 
     def evaluate(self, expr_list: List[Expression], env: Environment) -> SchemeVal:
         try:
-            res: SchemeVal = UndefVal()
-            for expr in expr_list:
-                res = self._eval_recursive(expr, env)
+            res = pure_eval_sequence(expr_list, env, self._eval_recursive)
         except SchemeRuntimeError as err:
             scheme_panic(str(err))
         return res
@@ -932,9 +937,7 @@ def pure_eval_call_proc_plain(expr: ListExpr, operator: ProcPlainVal, operands: 
         raise SchemeRuntimeError(expr.token, '%s expect %d arguments, get %d' % (
             operator.name, len(operator.parameters), len(operands)))
     new_env = env_extend(operator.env, operator.parameters, operands)
-    for body_expr in operator.body:
-        res = evl(body_expr, new_env)
-    return res
+    return pure_eval_sequence(operator.body, new_env, evl)
 
 def pure_eval_call_invalid(expr: ListExpr, operator: SchemeVal):
     raise SchemeRuntimeError(
@@ -962,15 +965,19 @@ def reparse_set(expr: ListExpr):
     return name_expr, initializer_expr
 
 
+def pure_eval_set(name_expr: SymbolExpr, initializer: SchemeVal, env: Environment):
+    try:
+        env_set(env, name_expr.token.literal, initializer)
+        return initializer
+    except SchemeEnvError:
+        raise SchemeRuntimeError(name_expr.token, 'symbol undefined')
+
+
 def eval_set(expr: ListExpr, env: Environment, evl: EvalFuncType):
     '''return the value just set'''
     name_expr, initializer_expr = reparse_set(expr)
-    intializer = evl(initializer_expr, env)
-    try:
-        env_set(env, name_expr.token.literal, intializer)
-        return intializer
-    except SchemeEnvError:
-        raise SchemeRuntimeError(expr.token, 'symbol undefined')
+    initializer = evl(initializer_expr, env)
+    return pure_eval_set(name_expr, initializer, env)
 
 
 def reparse_define(expr: ListExpr):
@@ -1006,22 +1013,30 @@ def reparse_define(expr: ListExpr):
             expr.token, 'define 2nd expression should be symbol or list, now %s' % type(expr1).__name__)
 
 
+def pure_eval_define_var(name_expr: SymbolExpr, initializer: SchemeVal, env: Environment):
+    env_define(env, name_expr.token.literal, initializer)
+    return SymbolVal(name_expr.token.literal)
+
+
+def pure_eval_define_proc_plain(name_expr: SymbolExpr, para_exprs: List[SymbolExpr], body_exprs: List[Expression], env: Environment):
+    proc_obj = ProcPlainVal(name_expr.token.literal, [
+                            p.token.literal for p in para_exprs], body_exprs, env)
+    env_define(env, name_expr.token.literal, proc_obj)
+    return SymbolVal(name_expr.token.literal)
+
+
 def eval_define(expr: ListExpr, env: Environment, evl: EvalFuncType):
     '''return the symbol defined'''
     reparsed = reparse_define(expr)
     if len(reparsed) == 2:  # define variable
         name_expr, initializer_expr = cast(
             Tuple[SymbolExpr, Expression], reparsed)
-        intializer = evl(initializer_expr, env)
-        env_define(env, name_expr.token.literal, intializer)
-        return SymbolVal(name_expr.token.literal)
+        initializer = evl(initializer_expr, env)
+        return pure_eval_define_var(name_expr, initializer, env)
     else:  # define procedure
         name_expr, para_exprs, body_exprs = cast(
             Tuple[SymbolExpr, List[SymbolExpr], List[Expression]], reparsed)
-        proc_obj = ProcPlainVal(name_expr.token.literal, [
-                                p.token.literal for p in para_exprs], body_exprs, env)
-        env_define(env, name_expr.token.literal, proc_obj)
-        return SymbolVal(name_expr.token.literal)
+        return pure_eval_define_proc_plain(name_expr, para_exprs, body_exprs, env)
 
 
 def reparse_if(expr: ListExpr):
@@ -1054,9 +1069,7 @@ def reparse_begin(expr: ListExpr):
 def eval_begin(expr: ListExpr, env: Environment, evl: EvalFuncType):
     '''return the last expression'''
     subexprs = reparse_begin(expr)
-    for subexpr in subexprs[:-1]:
-        evl(subexpr, env)
-    return evl(subexprs[-1], env)
+    return pure_eval_sequence(subexprs, env, evl)
 
 
 def reparse_lambda(expr: ListExpr):

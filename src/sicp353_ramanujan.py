@@ -3,9 +3,7 @@
 # I feel stream is really good at ordering and counting infinite sequence
 
 from typing import Callable, Tuple
-import sicp352_prime_number
-
-Stream = sicp352_prime_number.Stream
+from sicp352_prime_number import Stream
 
 
 def interleave(s1: Stream, s2: Stream, cmp: Callable[..., int]):
