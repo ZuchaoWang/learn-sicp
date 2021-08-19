@@ -1,16 +1,33 @@
 '''
 the motivation is to solve internal definition
 instead of moving all internal definitions to the front of procedure body, setting them to *unassigned*, then check at runtime
-we discover bad internal definitions at compile time, using static analysis, following https://craftinginterpreters.com/resolving-and-binding.html
+we discover some bad internal definitions at compile time, using static analysis, following https://craftinginterpreters.com/resolving-and-binding.html
 
 during the static analysis we also resolve the scope for each symbol, record them as distance, i.e. link_count of environment chain
 to use the distance information, we extend environment supports: env_set_at and env_lookup_at
 we also modify evaluator to use env_set_at and env_lookup_at, for symbol expression and set! expression
 
-our resolver allows "function usage before definition" and "mutual recursion" only in global scope
-such usage in local scope will be considered as "usage before initialization" error
-however, local scope do support single recursion
+static analysis detects "symbol usage before definition" error, only when usage and definition is in the same local scope
+it also detects "symbol redefinition" in the same local scope
+
+if "symbol usage before definition" happens in global scope, or usage and definition are in different scope
+we choose not to detect it in static analysis, and we instead detect it at runtime with distance information
+this is to allow "symbol used in function body before definition" in all scopes, for example:
+(define (f)
+  (define a (cons 1 (lambda () a)))
+  (car ((cdr a))))
+(f)
+specifically we allow "mutual recursion" in all scopes, for example:
+(define (f)
+  (define (even n) (if (= n 0) #t (odd (- n 1))))
+  (define (odd n) (if (= n 0) #f (even (- n 1))))
+  (even 5))
+(f)
+
+besides, we allow "symbol redefinition" in global scope, to facilitate REPL
+we do not move definition to front of scope, such as JavaScript's hoisting
 '''
+
 
 import inspect
 from typing import Any, Callable, Dict, List, Tuple, Type, Union, cast
@@ -84,14 +101,15 @@ def resolve_symbol_distance(expr: SymbolExpr, stack: ResolveStackType, bindings:
         scope_bindings = bindings[scope_expr]
         # in some local scope
         if symbol_name in scope_bindings:
-            if scope_bindings[symbol_name]:
-                return len(stack)-1-i
+            if scope_bindings[symbol_name] == False and i == len(stack)-1:
+                # if usage before initialization and in current local scope, generate error
+                raise SchemeResError(expr.token, 'symbol used before initialization')
             else:
-                raise SchemeResError(
-                    expr.token, 'symbol used before initialization')
-    # we assume it's in global scope
+                # either absolutely ok with True, or to be checked at runtime with i < len(stack)-1
+                # skip static check to allow "symbol used in function body before definition" and "mutual recursion"
+                return len(stack)-1-i
+    # if not in any local scope, we assume it's in global scope
     # whether it's indeed in global scope should be checked at runtime
-    # checking at static time is not easy, because we then need all primitives information
     return len(stack)
 
 
@@ -115,9 +133,13 @@ class Resolver:
     but instead of creating a new scope in _expr_bindings, we reuse the scope in the first phase, which should all be False
     within the local scope, we still check definitions, and modify the boolean to True
     we also check symbol usage, either calculate distance or trigger error
-    if the symbol name is in current or parent scope but value is False, then it's used before definition, this will trigger ResolutionError
-    if it's in some local scaope (current or parent) and the value is True, it's used after definition, we record the distance to that scope
-    if it's not in any local scope, it should be in global scope, we record the distance as link_count to global scope
+    if the symbol name is in current or parent local scope, we record its distance
+    we further check the value, if True, that's so good, it's used after definition
+    but if False, it's used before definition, we trigger SchemeResError if usage and definition are in the same scope, 
+    we ignore the problem if they are in different scope, to allow "symbol used in function body before definition" and "mutual recursion"
+    such case will be further checked at runtime
+    if it's not in any local scope, we assume it's in global scope, we record the distance as link_count to global scope
+    this also need to be further checked at runtime
     '''
 
     _type_rules: Dict[Type, ResolveFuncType]
@@ -248,7 +270,7 @@ def resolve_symbol_define(expr: SymbolExpr, phase: bool, stack: ResolveStackType
         symbol_name: str = expr.token.literal
         if not phase:  # phase 1 check redefinition
             if symbol_name in scope_bindings:
-                raise SchemeResError(expr.token, 'symbol redefinition')
+                raise SchemeResError(expr.token, 'local symbol redefinition')
         scope_bindings[symbol_name] = phase
 
 
@@ -352,11 +374,8 @@ def make_resolver():
 def _env_ancestor(env: Environment, distance: int):
     cur = env
     while distance > 0:
-        if cur.enclosing is None:
-            raise SchemeEnvError('no ancestor at distance %d' % distance)
-        else:
-            cur = cur.enclosing
-            distance -= 1
+        cur = cast(Environment, cur.enclosing) # we trust the distance provided by resolver
+        distance -= 1
     return cur
 
 
@@ -365,7 +384,7 @@ def env_set_at(env: Environment, distance: int, name: str, sv: SchemeVal):
     if name in cur.bindings:
         cur.bindings[name] = sv
     else:
-        raise SchemeEnvError('%s not defined' % name)
+        raise SchemeEnvError(cur)
 
 
 def env_lookup_at(env: Environment, distance: int, name: str):
@@ -373,14 +392,19 @@ def env_lookup_at(env: Environment, distance: int, name: str):
     if name in cur.bindings:
         return cur.bindings[name]
     else:
-        raise SchemeEnvError('%s not defined' % name)
+        raise SchemeEnvError(cur)
+
+
+def pure_resolved_eval_env_error(expr: SymbolExpr, env: Environment):
+    message = 'local symbol usage before initialization' if env.enclosing else 'global symbol undefined'
+    raise SchemeRuntimeError(expr.token, message)
 
 
 def pure_resolved_eval_symbol(expr: SymbolExpr, env: Environment, distances: ResolveDistancesType):
     try:
         return env_lookup_at(env, distances[expr], expr.token.literal)
     except SchemeEnvError as err:
-        raise SchemeRuntimeError(expr.token, err.message)
+        pure_resolved_eval_env_error(expr, err.env)
 
 
 class ResolvedEvaluator:
@@ -494,7 +518,7 @@ def resolved_eval_set(expr: ListExpr, env: Environment, eval: EvalFuncType, dist
                    name_expr.token.literal, intializer)
         return intializer
     except SchemeEnvError as err:
-        raise SchemeRuntimeError(expr.token, err.message)
+        pure_resolved_eval_env_error(name_expr, err.env)
 
 
 def make_resolved_evaluator():
@@ -560,13 +584,12 @@ def test_one(source: str, **kargs: str):
     except SchemePanic as err:
         # any kind of panic
         print('* panic: %s' % err.message)
-        if 'panic' in kargs:
-            assert err.message == kargs['panic']
+        assert err.message == kargs['panic']
     print('----------')
 
 
 def test():
-    # use before intialization
+    # use before intialization in the same scope forbidden
     test_one(
         '''
         (define x 1)
@@ -577,6 +600,40 @@ def test():
         (f)
         ''',
         panic='resolution error at SYMBOL:x in line 3: symbol used before initialization'
+    )
+    # use before intialization in different scopes pass resolution
+    test_one(
+        '''
+        (define (f)
+          (define a (cons 1 (lambda () a)))
+          (car ((cdr a))))
+        (f)
+        ''',
+        resolve='(2:cons 1) (2:a 1) (3:car 1) (3:cdr 1) (3:a 0) (4:f 0)',
+        result='1'
+    )
+    # use before intialization in different scopes pass resolution
+    test_one(
+        '''
+        (define (f)
+          (define (g) x)
+          (define x 1)
+          (g))
+        (f)
+        ''',
+        resolve='(2:x 1) (4:g 0) (5:f 0)',
+        result='1'
+    )
+    # use before intialization in different scopes fail at runtime
+    test_one(
+        '''
+        (define (f)
+          (define (g) x)
+          (g)
+          (define x 1))
+        (f)
+        ''',
+        panic='runtime error at SYMBOL:x in line 2: local symbol usage before initialization'
     )
     # self initialization forbidden
     test_one(
@@ -589,27 +646,6 @@ def test():
         ''',
         panic='resolution error at SYMBOL:x in line 3: symbol used before initialization'
     )
-    # local redefinition is forbidden
-    test_one(
-        '''
-        (define (f)
-          (define x 1)
-          (define x 2)
-          x)
-        (f)
-        ''',
-        panic='resolution error at SYMBOL:x in line 3: symbol redefinition'
-    )
-    # global redefinition is ok
-    test_one(
-        '''
-        (define x 1)
-        (define x 2)
-        x
-        ''',
-        resolve='(3:x 0)',
-        result='2'
-    )
     # undefined global variable pass resolution
     test_one(
         '''
@@ -618,7 +654,28 @@ def test():
         (f)
         ''',
         resolve='(2:+ 0) (2:x 0) (2:x 0) (3:f 0)',
-        panic='runtime error at SYMBOL:f in line 3: f not defined'
+        panic='runtime error at SYMBOL:f in line 3: global symbol undefined'
+    )
+    # local redefinition forbidden
+    test_one(
+        '''
+        (define (f)
+          (define x 1)
+          (define x 2)
+          x)
+        (f)
+        ''',
+        panic='resolution error at SYMBOL:x in line 3: local symbol redefinition'
+    )
+    # global redefinition ok
+    test_one(
+        '''
+        (define x 1)
+        (define x 2)
+        x
+        ''',
+        resolve='(3:x 0)',
+        result='2'
     )
     # local variable shadows outer definitions
     test_one(
@@ -672,17 +729,7 @@ def test():
         resolve='(3:= 2) (3:n 0) (5:* 2) (5:n 0) (5:factorial 1) (5:- 2) (5:n 0) (6:factorial 0) (7:run 0)',
         result='120'
     )
-    # mutual recursion allowed in global scope
-    test_one(
-        '''
-        (define (even n) (if (= n 0) #t (odd (- n 1))))
-        (define (odd n) (if (= n 0) #f (even (- n 1))))
-        (even 5)
-        ''',
-        resolve='(1:= 1) (1:n 0) (1:odd 1) (1:- 1) (1:n 0) (2:= 1) (2:n 0) (2:even 1) (2:- 1) (2:n 0) (3:even 0)',
-        result='#f'
-    )
-    # mutual recursion not allowed in local scope
+    # mutual recursion ok, even in local scope
     test_one(
         '''
         (define (f)
@@ -691,7 +738,17 @@ def test():
           (even 5))
         (f)
         ''',
-        panic='resolution error at SYMBOL:odd in line 2: symbol used before initialization'
+        result='#f'
+    )
+    # half mutual recursion error detected at runtime
+    test_one(
+        '''
+        (define (f)
+          (define (even n) (if (= n 0) #t (odd (- n 1))))
+          (even 5))
+        (f)
+        ''',
+        panic='runtime error at SYMBOL:odd in line 2: global symbol undefined'
     )
 
 

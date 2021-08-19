@@ -303,14 +303,20 @@ class SchemeVal:
 
 
 class SchemeEnvError(Exception):
-    def __init__(self, message: str):
-        self.message = message
+    def __init__(self, env: "Environment"):
+        self.env = env
 
 
 class Environment:
-    '''see chap 4.1.3 and https://craftinginterpreters.com/statements-and-state.html'''
+    '''
+    see chap 4.1.3 and https://craftinginterpreters.com/statements-and-state.html
+    
+    should not pass {} to __init__.bindings, because this {} will be shared among different instance
+    e.g. def __init__(self, bindings: Dict[str, SchemeVal]={}, enclosing: Optional["Environment"] = None):
+    see: https://stackoverflow.com/questions/26320899/why-is-the-empty-dictionary-a-dangerous-default-value-in-python
+    '''
 
-    def __init__(self, bindings: Dict[str, SchemeVal] = {}, enclosing: Optional["Environment"] = None):
+    def __init__(self, bindings: Dict[str, SchemeVal], enclosing: Optional["Environment"] = None):
         self.bindings = bindings
         self.enclosing = enclosing
 
@@ -333,14 +339,14 @@ def env_define(env: Environment, name: str, sv: SchemeVal):
 def env_set(env: Environment, name: str, sv: SchemeVal):
     env = _env_find(env, name)
     if env is None:
-        raise SchemeEnvError('%s not defined' % name)
+        raise SchemeEnvError(env)
     else:
         env.bindings[name] = sv
 
 def env_lookup(env: Environment, name: str):
     env = _env_find(env, name)
     if env is None:
-        raise SchemeEnvError('%s not defined' % name)
+        raise SchemeEnvError(env)
     else:
         return env.bindings[name]
 
@@ -856,8 +862,8 @@ class Evaluator:
     def _eval_symbol(self, expr: SymbolExpr, env: Environment):
         try:
             return env_lookup(env, expr.token.literal)
-        except SchemeEnvError as err:
-            raise SchemeRuntimeError(expr.token, err.message)
+        except SchemeEnvError:
+            raise SchemeRuntimeError(expr.token, 'symbol undefined')
 
     def _eval_string(self, expr: StringExpr, env: Environment):
         return StringVal(expr.token.literal)
@@ -963,8 +969,8 @@ def eval_set(expr: ListExpr, env: Environment, evl: EvalFuncType):
     try:
         env_set(env, name_expr.token.literal, intializer)
         return intializer
-    except SchemeEnvError as err:
-        raise SchemeRuntimeError(expr.token, err.message)
+    except SchemeEnvError:
+        raise SchemeRuntimeError(expr.token, 'symbol undefined')
 
 
 def reparse_define(expr: ListExpr):
@@ -1213,7 +1219,7 @@ def prim_newline():
 
 
 def make_global_env():
-    glbenv = Environment()
+    glbenv = Environment({})
     register_primitive(glbenv, '+', prim_op_add)
     register_primitive(glbenv, '-', prim_op_sub)
     register_primitive(glbenv, '*', prim_op_mul)
@@ -1294,8 +1300,7 @@ def test_one(source: str, **kargs: str):
     except SchemePanic as err:
         # any kind of panic
         print('* panic: %s' % err.message)
-        if 'panic' in kargs:
-            assert err.message == kargs['panic']
+        assert err.message == kargs['panic']
     print('----------')
 
 
@@ -1367,7 +1372,7 @@ def test_reparse():
 def test_env():
     test_one(
         '((lambda (a) (+ x 1)) 2)',
-        panic='runtime error at SYMBOL:x in line 1: x not defined'
+        panic='runtime error at SYMBOL:x in line 1: symbol undefined'
     )
 
 
