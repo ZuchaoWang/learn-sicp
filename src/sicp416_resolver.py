@@ -38,7 +38,7 @@ from typing import Any, Callable, Dict, List, Tuple, Type, Union, cast
 from sicp414_evaluator import BooleanExpr, BooleanVal, Environment, EvalFuncType, Expression, \
     ListExpr, NilVal, NumberExpr, NumberVal, Parser, SchemeEnvError, SchemePanic, SchemeReparseError, SchemeRuntimeError, \
     Scanner, SchemeVal, StringExpr, StringVal, SymbolExpr, Token, UndefVal, \
-    eval_and, eval_begin, eval_call, eval_define, eval_if, eval_lambda, eval_not, eval_or, eval_quote, make_global_env, \
+    eval_and, eval_begin, eval_call, eval_define, eval_if, eval_lambda, eval_not, eval_or, eval_quote, make_global_env, pure_eval_sequence, \
     reparse_and, reparse_begin, reparse_call, reparse_define, reparse_if, reparse_lambda, reparse_not, reparse_or, reparse_set, \
     scheme_flush, scheme_panic, stringify_token, stringify_value
 
@@ -403,9 +403,7 @@ class ResolvedEvaluator:
     def evaluate(self, expr_list: List[Expression], env: Environment, distances: ResolveDistancesType) -> SchemeVal:
         self._distances = distances
         try:
-            res: SchemeVal = UndefVal()
-            for expr in expr_list:
-                res = self._eval_recursive(expr, env)
+            res = pure_eval_sequence(expr_list, env, self._eval_recursive)
         except SchemeRuntimeError as err:
             scheme_panic(str(err))
         self._distances = {}
@@ -448,6 +446,9 @@ class ResolvedEvaluator:
 '''resolved evaluator list rule definitions'''
 
 ResolvedEvalListRuleFunc = Union[
+    Callable[[], SchemeVal],
+    Callable[[ListExpr], SchemeVal],
+    Callable[[ListExpr, Environment], SchemeVal],
     Callable[[ListExpr, Environment, EvalFuncType], SchemeVal],
     Callable[[ListExpr, Environment, EvalFuncType,
               ResolveDistancesType], SchemeVal],
@@ -484,10 +485,10 @@ def pure_resolved_eval_set(name_expr: SymbolExpr, initializer: SchemeVal, env: E
 
 
 @resolved_eval_list_rule_decorator
-def resolved_eval_set(expr: ListExpr, env: Environment, eval: EvalFuncType, distances: ResolveDistancesType):
+def resolved_eval_set(expr: ListExpr, env: Environment, evl: EvalFuncType, distances: ResolveDistancesType):
     '''return the value just set'''
     name_expr, initializer_expr = reparse_set(expr)
-    initializer = eval(initializer_expr, env)
+    initializer = evl(initializer_expr, env)
     return pure_resolved_eval_set(name_expr, initializer, env, distances)
 
 
