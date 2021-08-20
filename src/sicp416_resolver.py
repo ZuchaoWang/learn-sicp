@@ -35,12 +35,13 @@ from typing import Any, Callable, Dict, List, Tuple, Type, Union, cast
 # cannot use relative import: from .sicp414_evaluator import blablabla ...
 # but can use absolute import below
 
-from sicp414_evaluator import BooleanExpr, BooleanVal, Environment, EvalFuncType, Expression, \
-    ListExpr, NilVal, NumberExpr, NumberVal, Parser, SchemeEnvError, SchemePanic, SchemeReparseError, SchemeRuntimeError, \
-    Scanner, SchemeVal, StringExpr, StringVal, SymbolExpr, Token, UndefVal, \
-    eval_and, eval_begin, eval_call, eval_define, eval_if, eval_lambda, eval_not, eval_or, eval_quote, make_global_env, pure_eval_sequence, \
-    reparse_and, reparse_begin, reparse_call, reparse_define, reparse_if, reparse_lambda, reparse_not, reparse_or, reparse_set, \
-    scheme_flush, scheme_panic, stringify_token, stringify_value
+from sicp414_evaluator import AndExpr, BeginExpr, BodyExpr, BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, \
+    EvalRecurFuncType, Expression, GenericExpr, IfExpr, LambdaExpr, ListExpr, NilExpr, NotExpr, NumberExpr, OrExpr, QuoteExpr, \
+    SchemeEnvError, SchemePanic, SchemeRuntimeError, SchemeVal, SetExpr, StringExpr, SymbolExpr, Token, \
+    eval_and, eval_boolean, eval_call, eval_contents, eval_define_proc, eval_define_var, eval_if, \
+    eval_lambda, eval_nil, eval_not, eval_number, eval_or, eval_quote, eval_string, \
+    find_type, install_is_equal_rules, install_parser_list_rules, install_quote_rules, install_stringify_expr_rules, \
+    install_stringify_value_rules, make_global_env, parse_tokens, scan_source, scheme_flush, scheme_panic, stringify_value
 
 
 class SchemeResError(Exception):
@@ -49,16 +50,18 @@ class SchemeResError(Exception):
         self.message = message
 
     def __str__(self):
-        return 'resolution error at %s in line %d: %s' % (stringify_token(self.token), self.token.line+1, self.message)
+        return 'resolution error at %s in line %d: %s' % (str(self.token), self.token.line+1, self.message)
 
 
-ResolveFuncType = Callable[[Expression, bool], None]
-ResolveStackType = List[Expression]
-ResolveBindingsType = Dict[Expression, Dict[str, bool]]
-ResolveDistancesType = Dict[SymbolExpr, int]
+ResolverStackType = List[Expression]
+ResolverBindingsType = Dict[Expression, Dict[str, bool]]
+ResolverDistancesType = Dict[SymbolExpr, int]
+ResolveRecurFuncType = Callable[[Expression, bool], None]
+ResolveFuncType = Callable[[Expression, bool, ResolveRecurFuncType, ResolverStackType,
+                            ResolverBindingsType, ResolverDistancesType], None]
 
 
-def resolve_symbol_distance(expr: SymbolExpr, stack: ResolveStackType, bindings: ResolveBindingsType):
+def resolve_symbol_distance(expr: SymbolExpr, stack: ResolverStackType, bindings: ResolverBindingsType):
     symbol_name: str = expr.token.literal
     for i in range(len(stack)-1, -1, -1):
         scope_expr = stack[i]
@@ -78,7 +81,14 @@ def resolve_symbol_distance(expr: SymbolExpr, stack: ResolveStackType, bindings:
     return len(stack)
 
 
-class Resolver:
+_resolver_rules: Dict[Type, ResolveFuncType] = {}
+
+
+def update_resolver_rules(rules: Dict[Type, ResolveFuncType]):
+    _resolver_rules.update(rules)
+
+
+def resolve_expr(expr: BodyExpr):
     '''
     resolution need to traverse the scopes
     we notice each scope is associated with an expression, so we store expressions in the _expr_stack
@@ -106,129 +116,93 @@ class Resolver:
     if it's not in any local scope, we assume it's in global scope, we record the distance as link_count to global scope
     this also need to be further checked at runtime
     '''
+    expr_stack: ResolverStackType = []
+    expr_bindings: ResolverBindingsType = {}
+    distances: ResolverDistancesType = {}
 
-    _type_rules: Dict[Type, ResolveFuncType]
-    _list_rules: Dict[str, Callable[[ListExpr, bool, ResolveFuncType,
-                                     ResolveStackType, ResolveBindingsType, ResolveDistancesType], None]]
+    def resolve_recursive(expr: Expression, phase: bool):
+        '''
+        nested definition saves the mess to pass down expr_stack, expr_bindings, distances
+        it also makes the function type irrelavant to the 3 state parameters
+        '''
+        t = find_type(type(expr), _resolver_rules)
+        f = _resolver_rules[t]
+        f(expr, phase, resolve_recursive, expr_stack, expr_bindings, distances)
 
-    _expr_stack: ResolveStackType
-    _expr_bindings: ResolveBindingsType
-    _distances: ResolveDistancesType
-
-    def __init__(self, list_rules):
-        self._type_rules = {
-            SymbolExpr: self._resolve_symbol,
-            StringExpr: self._resolve_pass,
-            NumberExpr: self._resolve_pass,
-            BooleanExpr: self._resolve_pass,
-            ListExpr: self._resolve_list,
-        }
-        self._list_rules = list_rules
-        self._restart()
-
-    def _restart(self):
-        self._expr_stack = []
-        self._expr_bindings = {}
-        self._distances = {}
-
-    def resolve(self, expr_list: List[Expression]):
-        self._restart()
-        try:
-            for expr in expr_list:
-                self._resolve_recursive(expr, False)  # define phase
-                self._resolve_recursive(expr, True)  # resolve phase
-        except SchemeResError as err:
-            scheme_panic(str(err))
-        return self._distances
-
-    def _resolve_recursive(self, expr: Expression, phase: bool):
-        f = self._type_rules[type(expr)]
-        f(expr, phase)
-
-    def _resolve_symbol(self, expr: SymbolExpr, phase: bool):
-        if phase:  # only work in phase 2
-            self._distances[expr] = resolve_symbol_distance(
-                expr, self._expr_stack, self._expr_bindings)
-
-    def _resolve_pass(self, expr: Union[StringExpr, NumberExpr, BooleanExpr], phase: bool):
-        pass  # do nothing
-
-    def _resolve_list(self, expr: ListExpr, phase: bool):
-        # do the same, no matter which phase; just pass phase down
-        if len(expr.expressions) == 0:
-            pass
-        elif type(expr.expressions[0]) == SymbolExpr:
-            symbol_name = cast(SymbolExpr, expr.expressions[0]).token.literal
-            if symbol_name in self._list_rules:
-                self._resolve_list_rule(symbol_name, expr, phase)
-                return
-        self._resolve_list_rule('call', expr, phase)
-
-    def _resolve_list_rule(self, rule_name: str, expr: ListExpr, phase: bool):
-        try:
-            f = self._list_rules[rule_name]
-            # we have to pass all internal states to rule function
-            # this is ugly, but seems to be the cost of extensibility
-            f(expr, phase, self._resolve_recursive,
-              self._expr_stack, self._expr_bindings, self._distances)
-        except SchemeReparseError as err:
-            raise SchemeResError(err.token, err.message)
+    try:
+        resolve_recursive(expr, False)  # define phase
+        resolve_recursive(expr, True)  # resolve phase
+    except SchemeResError as err:
+        scheme_panic(str(err))
+    return distances
 
 
 '''resolution list rule definitions'''
 
-ResolveListRuleFunc = Union[
+ResolverRuleType = Union[
     Callable[[], None],
-    Callable[[ListExpr], None],
-    Callable[[ListExpr, bool], None],
-    Callable[[ListExpr, bool, ResolveFuncType], None],
-    Callable[[ListExpr, bool, ResolveFuncType, ResolveStackType], None],
-    Callable[[ListExpr, bool, ResolveFuncType,
-              ResolveStackType, ResolveBindingsType], None],
-    Callable[[ListExpr, bool, ResolveFuncType, ResolveStackType,
-              ResolveBindingsType, ResolveDistancesType], None],
+    Callable[[GenericExpr], None],
+    Callable[[GenericExpr, bool], None],
+    Callable[[GenericExpr, bool, ResolveRecurFuncType], None],
+    Callable[[GenericExpr, bool, ResolveRecurFuncType, ResolverStackType], None],
+    Callable[[GenericExpr, bool, ResolveRecurFuncType,
+              ResolverStackType, ResolverBindingsType], None],
+    Callable[[GenericExpr, bool, ResolveRecurFuncType, ResolverStackType,
+              ResolverBindingsType, ResolverDistancesType], None],
 ]
 
 
-def resolve_list_rule_decorator(rule_func: ResolveListRuleFunc):
+def resolver_rule_decorator(rule_func: ResolverRuleType):
     arity = len(inspect.getfullargspec(rule_func).args)
 
-    def _resolve_list_rule_wrapped(expr: ListExpr, phase: bool, resolve: ResolveFuncType,
-                                   stack: ResolveStackType, bindings: ResolveBindingsType, distances: ResolveDistancesType):
+    def _resolver_rule_wrapped(expr: Expression, phase: bool, resolve: ResolveRecurFuncType, stack: ResolverStackType, bindings: ResolverBindingsType, distances: ResolverDistancesType):
         args: List[Any] = [expr, phase, resolve, stack, bindings, distances]
         rule_func(*args[0:arity])
-    return _resolve_list_rule_wrapped
+    return _resolver_rule_wrapped
 
 
-@resolve_list_rule_decorator
-def resolve_quote():
-    pass
+@resolver_rule_decorator
+def resolve_symbol(expr: SymbolExpr, phase: bool, resolve: ResolveRecurFuncType, stack: ResolverStackType, bindings: ResolverBindingsType, distances: ResolverDistancesType):
+    if phase:  # only work in phase 2
+        distances[expr] = resolve_symbol_distance(expr, stack, bindings)
 
 
-@resolve_list_rule_decorator
-def resolve_call(expr: ListExpr, phase: bool, resolve: ResolveFuncType):
+@resolver_rule_decorator
+def resolve_pass():
+    pass  # do nothing
+
+
+def pure_resolve_sequence(expr_list: List[Expression], phase: bool, resolve: ResolveRecurFuncType):
+    for expr in expr_list:
+        resolve(expr, phase)
+
+
+@resolver_rule_decorator
+def resolve_contents(expr: Union[BodyExpr, BeginExpr, AndExpr, OrExpr], phase: bool, resolve: ResolveRecurFuncType):
+    pure_resolve_sequence(expr.contents, phase, resolve)
+
+
+@resolver_rule_decorator
+def resolve_call(expr: CallExpr, phase: bool, resolve: ResolveRecurFuncType):
     '''
     procedure body is resolved at definition time, not call time
     this is different from evaluator
     '''
-    operator_expr, operand_exprs = reparse_call(expr)
-    resolve(operator_expr, phase)
-    for subexpr in operand_exprs:
+    resolve(expr.operator, phase)
+    for subexpr in expr.operands:
         resolve(subexpr, phase)
 
 
-@resolve_list_rule_decorator
-def resolve_set(expr: ListExpr, phase: bool, resolve: ResolveFuncType, stack: ResolveStackType,
-                bindings: ResolveBindingsType, distances: ResolveDistancesType):
+@resolver_rule_decorator
+def resolve_set(expr: SetExpr, phase: bool, resolve: ResolveRecurFuncType, stack: ResolverStackType, bindings: ResolverBindingsType, distances: ResolverDistancesType):
     '''the distance is on the name_expr, although we could alternatively store it on the list_expr'''
-    name_expr, initializer_expr = reparse_set(expr)
-    resolve(initializer_expr, phase)
+    resolve(expr.initializer, phase)
     if phase:  # only work in phase 2
-        distances[name_expr] = resolve_symbol_distance(
-            name_expr, stack, bindings)
+        distances[expr.name] = resolve_symbol_distance(
+            expr.name, stack, bindings)
 
 
-def resolve_symbol_define(expr: SymbolExpr, phase: bool, stack: ResolveStackType, bindings: ResolveBindingsType):
+def resolve_define_symbol_name(expr: SymbolExpr, phase: bool, resolve: ResolveRecurFuncType, stack: ResolverStackType, bindings: ResolverBindingsType):
     if len(stack) > 0:  # skip global scope
         scope_expr = stack[-1]  # only cares local scope
         scope_bindings = bindings[scope_expr]
@@ -239,98 +213,74 @@ def resolve_symbol_define(expr: SymbolExpr, phase: bool, stack: ResolveStackType
         scope_bindings[symbol_name] = phase
 
 
-def resolve_proc_define(proc_expr: ListExpr, para_exprs: List[SymbolExpr], body_exprs: List[Expression], phase: bool,
-                        resolve: ResolveFuncType, stack: ResolveStackType, bindings: ResolveBindingsType):
-    stack.append(proc_expr)
+@resolver_rule_decorator
+def resolve_define_var(expr: DefineVarExpr, phase: bool, resolve: ResolveRecurFuncType, stack: ResolverStackType, bindings: ResolverBindingsType):
+    resolve(expr.initializer, phase)
+    resolve_define_symbol_name(expr.name, phase, resolve, stack, bindings)
+
+
+def resolve_define_proc_value(expr: Union[DefineProcExpr, LambdaExpr], phase: bool, resolve: ResolveRecurFuncType,
+                              stack: ResolverStackType, bindings: ResolverBindingsType):
+    stack.append(expr)
     if not phase:  # create local scope only in phase 1
-        bindings[proc_expr] = {}
+        bindings[expr] = {}
     # resolve parameters
-    local_scope = bindings[proc_expr]
-    for p in para_exprs:
+    local_scope = bindings[expr]
+    for p in expr.parameters:
         local_scope[p.token.literal] = phase
     # resolve body recursively
-    for b in body_exprs:
+    for b in expr.body:
         resolve(b, phase)
     stack.pop()
 
 
-@resolve_list_rule_decorator
-def resolve_define(expr: ListExpr, phase: bool, resolve: ResolveFuncType, stack: ResolveStackType, bindings: ResolveBindingsType):
-    reparsed = reparse_define(expr)
-    if len(reparsed) == 2:  # define variable
-        name_expr, initializer_expr = cast(
-            Tuple[SymbolExpr, Expression], reparsed)
-        resolve(initializer_expr, phase)
-        resolve_symbol_define(name_expr, phase, stack, bindings)
-    else:  # define procedure
-        name_expr, para_exprs, body_exprs = cast(
-            Tuple[SymbolExpr, List[SymbolExpr], List[Expression]], reparsed)
-        # resolve procedure parameters and body at definition time
-        # define procedure name eagerly, so that it can be used inside procedure body
-        resolve_symbol_define(name_expr, phase, stack, bindings)
-        resolve_proc_define(expr, para_exprs, body_exprs,
-                            phase, resolve, stack, bindings)
-
-
-@resolve_list_rule_decorator
-def resolve_if(expr: ListExpr, phase: bool, resolve: ResolveFuncType):
-    pred_expr, then_expr, else_expr = reparse_if(expr)
-    resolve(pred_expr, phase)
-    resolve(then_expr, phase)
-    resolve(else_expr, phase)
-
-
-@resolve_list_rule_decorator
-def resolve_begin(expr: ListExpr, phase: bool, resolve: ResolveFuncType):
-    subexprs = reparse_begin(expr)
-    for subexpr in subexprs:
-        resolve(subexpr, phase)
-
-
-@resolve_list_rule_decorator
-def resolve_lambda(expr: ListExpr, phase: bool, resolve: ResolveFuncType, stack: ResolveStackType, bindings: ResolveBindingsType):
-    para_exprs, body_exprs = reparse_lambda(expr)
+@resolver_rule_decorator
+def resolve_define_proc(expr: DefineProcExpr, phase: bool, resolve: ResolveRecurFuncType, stack: ResolverStackType, bindings: ResolverBindingsType):
     # resolve procedure parameters and body at definition time
-    resolve_proc_define(expr, para_exprs, body_exprs,
-                        phase, resolve, stack, bindings)
+    # define procedure name eagerly, so that it can be used inside procedure body
+    resolve_define_symbol_name(expr.name, phase, resolve, stack, bindings)
+    resolve_define_proc_value(expr, phase, resolve, stack, bindings)
 
 
-@resolve_list_rule_decorator
-def resolve_and(expr: ListExpr, phase: bool, resolve: ResolveFuncType):
-    subexprs = reparse_and(expr)
-    for subexpr in subexprs:
-        resolve(subexpr, phase)
+@resolver_rule_decorator
+def resolve_if(expr: IfExpr, phase: bool, resolve: ResolveRecurFuncType):
+    resolve(expr.pred, phase)
+    resolve(expr.then_branch, phase)
+    resolve(expr.else_branch, phase)
 
 
-@resolve_list_rule_decorator
-def resolve_or(expr: ListExpr, phase: bool, resolve: ResolveFuncType):
-    subexprs = reparse_or(expr)
-    for subexpr in subexprs:
-        resolve(subexpr, phase)
+@resolver_rule_decorator
+def resolve_lambda(expr: LambdaExpr, phase: bool, resolve: ResolveRecurFuncType, stack: ResolverStackType, bindings: ResolverBindingsType):
+    # resolve procedure parameters and body at definition time
+    resolve_define_proc_value(expr, phase, resolve, stack, bindings)
 
 
-@resolve_list_rule_decorator
-def resolve_not(expr: ListExpr, phase: bool, resolve: ResolveFuncType):
-    subexpr = reparse_not(expr)
-    resolve(subexpr, phase)
+@resolver_rule_decorator
+def resolve_not(expr: NotExpr, phase: bool, resolve: ResolveRecurFuncType):
+    resolve(expr.content, phase)
 
 
-def make_resolver():
-    '''make custom resolver, using list rules'''
-    list_rules = {
-        'quote': resolve_quote,
-        'call': resolve_call,
-        'set!': resolve_set,
-        'define': resolve_define,
-        'if': resolve_if,
-        'begin': resolve_begin,
-        'lambda': resolve_lambda,
-        'and': resolve_and,
-        'or': resolve_or,
-        'not': resolve_not
+def install_resolver_rules():
+    rules = {
+        BodyExpr: resolve_contents,
+        SymbolExpr: resolve_symbol,
+        StringExpr: resolve_pass,
+        NumberExpr: resolve_pass,
+        BooleanExpr: resolve_pass,
+        NilExpr: resolve_pass,
+        QuoteExpr: resolve_pass,
+        CallExpr: resolve_call,
+        SetExpr: resolve_set,
+        DefineVarExpr: resolve_define_var,
+        DefineProcExpr: resolve_define_proc,
+        IfExpr: resolve_if,
+        BeginExpr: resolve_contents,
+        LambdaExpr: resolve_lambda,
+        AndExpr: resolve_contents,
+        OrExpr: resolve_contents,
+        NotExpr: resolve_not
     }
-    resolver = Resolver(list_rules)
-    return resolver
+    update_resolver_rules(rules)
 
 
 '''extending environment to support distance'''
@@ -361,121 +311,74 @@ def env_lookup_at(env: Environment, distance: int, name: str):
         raise SchemeEnvError(cur)
 
 
+'''resolved evaluator'''
+
+
+ResolvedEvalFuncType = Callable[[
+    Expression, Environment, EvalRecurFuncType, ResolverDistancesType], SchemeVal]
+
+_resolved_eval_rules: Dict[Type, ResolvedEvalFuncType] = {}
+
+
+def update_resolved_eval_rules(rules: Dict[Type, ResolvedEvalFuncType]):
+    _resolved_eval_rules.update(rules)
+
+
+def resolved_evaluate_expr(expr: BodyExpr, env: Environment, distances: ResolverDistancesType):
+    '''similar to evaluator, just need to use distances information'''
+    def resolved_evaluate_recursive(expr: Expression, env: Environment):
+        t = find_type(type(expr), _resolved_eval_rules)
+        f = _resolved_eval_rules[t]
+        return f(expr, env, resolved_evaluate_recursive, distances)
+
+    try:
+        res = resolved_evaluate_recursive(expr, env)
+    except SchemeRuntimeError as err:
+        scheme_panic(str(err))
+    return res
+
+
+'''
+resovled evaluator rule definitions
+'''
+
+ResolvedEvalRuleType = Union[
+    Callable[[], SchemeVal],
+    Callable[[GenericExpr], SchemeVal],
+    Callable[[GenericExpr, Environment], SchemeVal],
+    Callable[[GenericExpr, Environment, EvalRecurFuncType], SchemeVal],
+    Callable[[GenericExpr, Environment, EvalRecurFuncType,
+              ResolverDistancesType], SchemeVal],
+]
+
+
+def resolved_eval_rule_decorator(rule_func: ResolvedEvalRuleType):
+    arity = len(inspect.getfullargspec(rule_func).args)
+
+    def _resolved_eval_list_rule_wrapped(expr: ListExpr, env: Environment, evl: EvalRecurFuncType, distances: ResolverDistancesType):
+        args: List[Any] = [expr, env, evl, distances]
+        return rule_func(*args[0:arity])
+    return _resolved_eval_list_rule_wrapped
+
+
 def pure_resolved_eval_env_error(expr: SymbolExpr, env: Environment):
     message = 'local symbol used before initialization' if env.enclosing else 'global symbol undefined'
     raise SchemeRuntimeError(expr.token, message)
 
 
-def pure_resolved_eval_symbol(expr: SymbolExpr, env: Environment, distances: ResolveDistancesType):
+def pure_resolved_eval_symbol(expr: SymbolExpr, env: Environment, distances: ResolverDistancesType):
     try:
         return env_lookup_at(env, distances[expr], expr.token.literal)
     except SchemeEnvError as err:
         pure_resolved_eval_env_error(expr, err.env)
 
 
-class ResolvedEvaluator:
-    '''
-    redefined scheme evaluator that takes resolution distance
-
-    only changed a few places:
-    add distances parameter to some functions
-    and use env_lookup_at in _eval_symbol, to replace env_lookup
-
-    unfortunately have to rewrite the whole class
-    '''
-
-    _list_rules: Dict[str, Callable[[ListExpr, Environment,
-                                     EvalFuncType, ResolveDistancesType], SchemeVal]]
-    _type_rules: Dict[Type, EvalFuncType]
-    _distances: ResolveDistancesType
-
-    def __init__(self, list_rules: Dict[str, Callable[[ListExpr, Environment, EvalFuncType, ResolveDistancesType], SchemeVal]]):
-        self._list_rules = list_rules
-        self._type_rules = {
-            SymbolExpr: self._eval_symbol,  # type: ignore
-            StringExpr: self._eval_string,  # type: ignore
-            NumberExpr: self._eval_number,  # type: ignore
-            BooleanExpr: self._eval_boolean,  # type: ignore
-            ListExpr: self._eval_list,  # type: ignore
-        }
-        self._distances = {}
-
-    def evaluate(self, expr_list: List[Expression], env: Environment, distances: ResolveDistancesType) -> SchemeVal:
-        self._distances = distances
-        try:
-            res = pure_eval_sequence(expr_list, env, self._eval_recursive)
-        except SchemeRuntimeError as err:
-            scheme_panic(str(err))
-        self._distances = {}
-        return res
-
-    def _eval_recursive(self, expr: Expression, env: Environment):
-        f = self._type_rules[type(expr)]
-        return f(expr, env)
-
-    def _eval_symbol(self, expr: SymbolExpr, env: Environment):
-        return pure_resolved_eval_symbol(expr, env, self._distances)
-
-    def _eval_string(self, expr: StringExpr, env: Environment):
-        return StringVal(expr.token.literal)
-
-    def _eval_number(self, expr: NumberExpr, env: Environment):
-        return NumberVal(expr.token.literal)
-
-    def _eval_boolean(self, expr: BooleanExpr, env: Environment):
-        return BooleanVal(expr.token.literal)
-
-    def _eval_list(self, expr: ListExpr, env: Environment):
-        if len(expr.expressions) == 0:
-            return NilVal()
-        elif type(expr.expressions[0]) == SymbolExpr:
-            symbol_name = cast(SymbolExpr, expr.expressions[0]).token.literal
-            if symbol_name in self._list_rules:
-                return self._eval_list_rule(symbol_name, expr, env)
-        return self._eval_list_rule('call', expr, env)
-
-    def _eval_list_rule(self, rule_name: str, expr: ListExpr, env: Environment):
-        try:
-            f = self._list_rules[rule_name]
-            res = f(expr, env, self._eval_recursive, self._distances)
-        except SchemeReparseError as err:
-            raise SchemeRuntimeError(err.token, err.message)
-        return res
+@resolved_eval_rule_decorator
+def resolved_eval_symbol(expr: SymbolExpr, env: Environment, evl: EvalRecurFuncType, distances: ResolverDistancesType):
+    return pure_resolved_eval_symbol(expr, env, distances)
 
 
-'''resolved evaluator list rule definitions'''
-
-ResolvedEvalListRuleFunc = Union[
-    Callable[[], SchemeVal],
-    Callable[[ListExpr], SchemeVal],
-    Callable[[ListExpr, Environment], SchemeVal],
-    Callable[[ListExpr, Environment, EvalFuncType], SchemeVal],
-    Callable[[ListExpr, Environment, EvalFuncType,
-              ResolveDistancesType], SchemeVal],
-]
-
-
-def resolved_eval_list_rule_decorator(rule_func: ResolvedEvalListRuleFunc):
-    arity = len(inspect.getfullargspec(rule_func).args)
-
-    def _resolved_eval_list_rule_wrapped(expr: ListExpr, env: Environment, evl: EvalFuncType, distances: ResolveDistancesType):
-        args: List[Any] = [expr, env, evl, distances]
-        return rule_func(*args[0:arity])
-    return _resolved_eval_list_rule_wrapped
-
-
-resolved_eval_quote = resolved_eval_list_rule_decorator(eval_quote)
-resolved_eval_call = resolved_eval_list_rule_decorator(eval_call)
-resolved_eval_define = resolved_eval_list_rule_decorator(eval_define)
-resolved_eval_if = resolved_eval_list_rule_decorator(eval_if)
-resolved_eval_begin = resolved_eval_list_rule_decorator(eval_begin)
-resolved_eval_lambda = resolved_eval_list_rule_decorator(eval_lambda)
-resolved_eval_and = resolved_eval_list_rule_decorator(eval_and)
-resolved_eval_or = resolved_eval_list_rule_decorator(eval_or)
-resolved_eval_not = resolved_eval_list_rule_decorator(eval_not)
-
-
-def pure_resolved_eval_set(name_expr: SymbolExpr, initializer: SchemeVal, env: Environment, distances: ResolveDistancesType):
+def pure_resolved_eval_set(name_expr: SymbolExpr, initializer: SchemeVal, env: Environment, distances: ResolverDistancesType):
     try:
         env_set_at(env, distances[name_expr],
                    name_expr.token.literal, initializer)
@@ -484,30 +387,60 @@ def pure_resolved_eval_set(name_expr: SymbolExpr, initializer: SchemeVal, env: E
         pure_resolved_eval_env_error(name_expr, err.env)
 
 
-@resolved_eval_list_rule_decorator
-def resolved_eval_set(expr: ListExpr, env: Environment, evl: EvalFuncType, distances: ResolveDistancesType):
+@resolved_eval_rule_decorator
+def resolved_eval_set(expr: SetExpr, env: Environment, evl: EvalRecurFuncType, distances: ResolverDistancesType):
     '''return the value just set'''
-    name_expr, initializer_expr = reparse_set(expr)
-    initializer = evl(initializer_expr, env)
-    return pure_resolved_eval_set(name_expr, initializer, env, distances)
+    initializer = evl(expr.initializer, env)
+    return pure_resolved_eval_set(expr.name, initializer, env, distances)
 
 
-def make_resolved_evaluator():
-    '''make custom resolved evaluator, using list rules'''
-    list_rules = {
-        'quote': resolved_eval_quote,
-        'call': resolved_eval_call,
-        'set!': resolved_eval_set,
-        'define': resolved_eval_define,
-        'if': resolved_eval_if,
-        'begin': resolved_eval_begin,
-        'lambda': resolved_eval_lambda,
-        'and': resolved_eval_and,
-        'or': resolved_eval_or,
-        'not': resolved_eval_not
+resolved_eval_contents = resolved_eval_rule_decorator(eval_contents)
+resolved_eval_string = resolved_eval_rule_decorator(eval_string)
+resolved_eval_number = resolved_eval_rule_decorator(eval_number)
+resolved_eval_boolean = resolved_eval_rule_decorator(eval_boolean)
+resolved_eval_nil = resolved_eval_rule_decorator(eval_nil)
+resolved_eval_quote = resolved_eval_rule_decorator(eval_quote)
+resolved_eval_call = resolved_eval_rule_decorator(eval_call)
+resolved_eval_define_var = resolved_eval_rule_decorator(eval_define_var)
+resolved_eval_define_proc = resolved_eval_rule_decorator(eval_define_proc)
+resolved_eval_if = resolved_eval_rule_decorator(eval_if)
+resolved_eval_lambda = resolved_eval_rule_decorator(eval_lambda)
+resolved_eval_and = resolved_eval_rule_decorator(eval_and)
+resolved_eval_or = resolved_eval_rule_decorator(eval_or)
+resolved_eval_not = resolved_eval_rule_decorator(eval_not)
+
+
+def install_resolved_eval_rules():
+    rules = {
+        BodyExpr: resolved_eval_contents,
+        SymbolExpr: resolved_eval_symbol,
+        StringExpr: resolved_eval_string,
+        NumberExpr: resolved_eval_number,
+        BooleanExpr: resolved_eval_boolean,
+        NilExpr: resolved_eval_nil,
+        QuoteExpr: resolved_eval_quote,
+        CallExpr: resolved_eval_call,
+        SetExpr: resolved_eval_set,
+        DefineVarExpr: resolved_eval_define_var,
+        DefineProcExpr: resolved_eval_define_proc,
+        IfExpr: resolved_eval_if,
+        BeginExpr: resolved_eval_contents,
+        LambdaExpr: resolved_eval_lambda,
+        AndExpr: resolved_eval_and,
+        OrExpr: resolved_eval_or,
+        NotExpr: resolved_eval_not
     }
-    evaluator = ResolvedEvaluator(list_rules)
-    return evaluator
+    update_resolved_eval_rules(rules)
+
+
+def install_rules():
+    install_parser_list_rules()
+    install_stringify_expr_rules()
+    install_stringify_value_rules()
+    install_is_equal_rules()
+    install_quote_rules()
+    install_resolver_rules()
+    install_resolved_eval_rules()
 
 
 def test_one(source: str, **kargs: str):
@@ -522,16 +455,13 @@ def test_one(source: str, **kargs: str):
     print('* source: %s' % source)
     try:
         # scan
-        scanner = Scanner()
-        tokens = scanner.scan(source)
+        tokens = scan_source(source)
 
         # parse
-        parser = Parser()
-        expr_list = parser.parse(tokens)
+        expr = parse_tokens(tokens)
 
         # resolve
-        resolver = make_resolver()
-        distances = resolver.resolve(expr_list)
+        distances = resolve_expr(expr)
         resolve_str = ' '.join(
             ['(%d:%s %d)' % (expr.token.line+1, expr.token.literal, distances[expr]) for expr in distances])
         if len(resolve_str):
@@ -541,8 +471,7 @@ def test_one(source: str, **kargs: str):
 
         # evaluate
         glbenv = make_global_env()
-        evaluator = make_resolved_evaluator()
-        result = evaluator.evaluate(expr_list, glbenv, distances)
+        result = resolved_evaluate_expr(expr, glbenv, distances)
         result_str = stringify_value(result)
         output_str = scheme_flush()
         if len(output_str):
@@ -724,4 +653,5 @@ def test():
 
 
 if __name__ == '__main__':
+    install_rules()
     test()

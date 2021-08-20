@@ -413,6 +413,7 @@ class BodyExpr(Expression):
 
     def __init__(self, expressions: List[Expression]):
         self.expressions = expressions
+        self.contents = expressions
 
 
 class SchemeParserError(Exception):
@@ -743,13 +744,13 @@ def parse_not(expr: ListExpr):
     return NotExpr(expr, expr.expressions[1])
 
 
-def make_parser_list_rules():
+def install_parser_list_rules():
     '''
     we use #nil instead of nil, #call instead of call
     because #nil and #call are both invalid tokens
     this forbids the syntax of (#nill blabla) and (#call blabla)
     '''
-    return {
+    rules = {
         '#nil': parse_nil,
         '#call': parse_call,
         'quote': parse_quote,
@@ -762,14 +763,17 @@ def make_parser_list_rules():
         'or': parse_or,
         'not': parse_not
     }
+    update_parser_list_rules(rules)
 
 
 '''expression stringifier'''
 
-_stringify_expr_rules: Dict[Type, Callable[[Expression], str]] = {}
+StringifyExprFuncType = Callable[[Expression], str]
+
+_stringify_expr_rules: Dict[Type, StringifyExprFuncType] = {}
 
 
-def update_stringify_expr_rules(rules: Dict[Type, Callable[[Expression], str]]):
+def update_stringify_expr_rules(rules: Dict[Type, StringifyExprFuncType]):
     _stringify_expr_rules.update(rules)
 
 
@@ -779,13 +783,13 @@ def stringify_expr(expr: Expression):
     return f(expr)
 
 
-StringifyExprRuleFunc = Union[
+StringifyExprRuleType = Union[
     Callable[[], SchemeVal],
     Callable[[GenericExpr], str],
 ]
 
 
-def stringify_expr_rule_decorator(rule_func: StringifyExprRuleFunc):
+def stringify_expr_rule_decorator(rule_func: StringifyExprRuleType):
     arity = len(inspect.getfullargspec(rule_func).args)
 
     def _stringify_expr_rule_wrapped(expr: Expression):
@@ -827,8 +831,8 @@ def stringify_expr_body(expr: BodyExpr):
     return ' '.join(substrs)
 
 
-def make_stringify_expr_rules():
-    return {
+def install_stringify_expr_rules():
+    rules = {
         SymbolExpr: stringify_expr_symbol,
         StringExpr: stringify_expr_string,
         NumberExpr: stringify_expr_number,
@@ -836,6 +840,7 @@ def make_stringify_expr_rules():
         ListExpr: stringify_expr_list,
         BodyExpr: stringify_expr_body
     }
+    update_stringify_expr_rules(rules)
 
 
 '''
@@ -917,10 +922,12 @@ class ProcPlainVal(ProcVal):
 
 '''value stringifier'''
 
-_stringify_value_rules: Dict[Type, Callable[[SchemeVal], str]] = {}
+StringifyValueFuncType = Callable[[SchemeVal], str]
+
+_stringify_value_rules: Dict[Type, StringifyValueFuncType] = {}
 
 
-def update_stringify_value_rules(rules: Dict[Type, Callable[[SchemeVal], str]]):
+def update_stringify_value_rules(rules: Dict[Type, StringifyValueFuncType]):
     _stringify_value_rules.update(rules)
 
 
@@ -930,13 +937,13 @@ def stringify_value(sv: SchemeVal):
     return f(sv)
 
 
-StringifyValueRuleFunc = Union[
+StringifyValueRuleType = Union[
     Callable[[], SchemeVal],
     Callable[[GenericVal], str],
 ]
 
 
-def stringify_value_rule_decorator(rule_func: StringifyValueRuleFunc):
+def stringify_value_rule_decorator(rule_func: StringifyValueRuleType):
     arity = len(inspect.getfullargspec(rule_func).args)
 
     def _stringify_value_rule_wrapped(sv: SchemeVal):
@@ -998,8 +1005,8 @@ def stringify_value_primitive(sv: PrimVal):
     return '[primitive %s]' % sv.name
 
 
-def make_stringify_value_rules():
-    return {
+def install_stringify_value_rules():
+    rules = {
         SymbolVal: stringify_value_symbol,
         StringVal: stringify_value_string,
         NumberVal: stringify_value_number,
@@ -1010,6 +1017,7 @@ def make_stringify_value_rules():
         ProcVal: stringify_value_procedure,
         PrimVal: stringify_value_primitive,
     }
+    update_stringify_value_rules(rules)
 
 
 '''value equality checker'''
@@ -1032,13 +1040,13 @@ def is_equal(x: SchemeVal, y: SchemeVal):
         return False
 
 
-IsEqualRuleFunc = Union[
+IsEqualRuleType = Union[
     Callable[[], SchemeVal],
     Callable[[GenericVal, GenericVal], str],
 ]
 
 
-def is_equal_rule_decorator(rule_func: IsEqualRuleFunc):
+def is_equal_rule_decorator(rule_func: IsEqualRuleType):
     arity = len(inspect.getfullargspec(rule_func).args)
 
     def _is_equal_rule_wrapped(x: SchemeVal, y: SchemeVal):
@@ -1062,8 +1070,8 @@ def is_equal_object(x: Union[PairVal, PrimVal, ProcVal], y: Union[PairVal, PrimV
     return x == y
 
 
-def make_is_equal_rules():
-    return {
+def install_is_equal_rules():
+    rules = {
         SymbolVal: is_equal_literal,
         StringVal: is_equal_literal,
         NumberVal: is_equal_literal,
@@ -1074,6 +1082,7 @@ def make_is_equal_rules():
         ProcVal: is_equal_object,
         PrimVal: is_equal_object,
     }
+    update_is_equal_rules(rules)
 
 
 '''value equality checker'''
@@ -1125,13 +1134,13 @@ def quote_expr(expr: Expression):
     return f(expr)
 
 
-QuoteRuleFunc = Union[
+QuoteRuleType = Union[
     Callable[[], SchemeVal],
     Callable[[GenericExpr], SchemeVal],
 ]
 
 
-def quote_rule_decorator(rule_func: QuoteRuleFunc):
+def quote_rule_decorator(rule_func: QuoteRuleType):
     arity = len(inspect.getfullargspec(rule_func).args)
 
     def _quote_rule_wrapped(expr: Expression):
@@ -1166,14 +1175,15 @@ def quote_list(expr: ListExpr):
     return pair_from_list(subvals)
 
 
-def make_quote_rules():
-    return {
+def install_quote_rules():
+    rules = {
         SymbolExpr: quote_symbol,
         StringExpr: quote_string,
         NumberExpr: quote_number,
         BooleanExpr: quote_boolean,
         ListExpr: quote_list,
     }
+    update_quote_rules(rules)
 
 
 '''evaluator'''
@@ -1193,79 +1203,59 @@ class SchemeRuntimeError(Exception):
         return 'runtime error at %s in line %d: %s' % (str(self.token), self.token.line+1, self.message)
 
 
-EvalFuncType = Callable[[Expression, Environment], SchemeVal]
+EvalRecurFuncType = Callable[[Expression, Environment], SchemeVal]
+EvalFuncType = Callable[[Expression, Environment, EvalRecurFuncType], SchemeVal]
+
+_eval_rules: Dict[Type, EvalFuncType] = {}
 
 
-def pure_eval_sequence(expr_list: List[Expression], env: Environment, evl: EvalFuncType):
-    res: SchemeVal = UndefVal()
-    for expr in expr_list:
-        res = evl(expr, env)
-    return res
-
-
-class Evaluator:
-    '''
-    scheme evaluator, correspond to chap 4.1.1
-    we make evaluator object very simple, so that we can easily rewrite it later
-    '''
-
-    _rules: Dict[Type, Callable[[
-        Expression, Environment, EvalFuncType], SchemeVal]]
-
-    def __init__(self):
-        self._rules = {}
-
-    def update_rules(self, rules: Dict[Type, Callable[[Expression, Environment, EvalFuncType], SchemeVal]]):
-        self._rules.update(rules)
-
-    def evaluate(self, expr: BodyExpr, env: Environment) -> SchemeVal:
-        try:
-            res = self._eval_recursive(expr, env)
-        except SchemeRuntimeError as err:
-            scheme_panic(str(err))
-        return res
-
-    def _eval_recursive(self, expr: Expression, env: Environment) -> SchemeVal:
-        t = find_type(type(expr), self._rules)
-        f = self._rules[t]
-        return f(expr, env, self._eval_recursive)
-
-
-_evaluator = Evaluator()
-
+def update_eval_rules(rules: Dict[Type, EvalFuncType]):
+    _eval_rules.update(rules)
 
 def evaluate_expr(expr: BodyExpr, env: Environment):
-    return _evaluator.evaluate(expr, env)
+    def evaluate_recursive(expr: Expression, env: Environment) -> SchemeVal:
+        t = find_type(type(expr), _eval_rules)
+        f = _eval_rules[t]
+        return f(expr, env, evaluate_recursive)
 
-
-def update_eval_rules(rules: Dict[Type, Callable[[Expression, Environment, EvalFuncType], SchemeVal]]):
-    _evaluator.update_rules(rules)
+    try:
+        res = evaluate_recursive(expr, env)
+    except SchemeRuntimeError as err:
+        scheme_panic(str(err))
+    return res
 
 
 '''
 evaluator rule definitions
 '''
 
-EvalRuleFunc = Union[
+EvalRuleType = Union[
     Callable[[], SchemeVal],
     Callable[[GenericExpr], SchemeVal],
     Callable[[GenericExpr, Environment], SchemeVal],
-    Callable[[GenericExpr, Environment, EvalFuncType], SchemeVal],
+    Callable[[GenericExpr, Environment, EvalRecurFuncType], SchemeVal],
 ]
 
 
-def eval_rule_decorator(rule_func: EvalRuleFunc):
+def eval_rule_decorator(rule_func: EvalRuleType):
     arity = len(inspect.getfullargspec(rule_func).args)
 
-    def _eval_rule_wrapped(expr: Expression, env: Environment, evl: EvalFuncType):
+    def _eval_rule_wrapped(expr: Expression, env: Environment, evl: EvalRecurFuncType):
         args: List[Any] = [expr, env, evl]
         return rule_func(*args[0:arity])
     return _eval_rule_wrapped
 
 
+def pure_eval_sequence(expr_list: List[Expression], env: Environment, evl: EvalRecurFuncType):
+    res: SchemeVal = UndefVal()
+    for expr in expr_list:
+        res = evl(expr, env)
+    return res
+
 @eval_rule_decorator
-def eval_body(expr: BodyExpr, env: Environment, evl: EvalFuncType):
-    return pure_eval_sequence(expr.expressions, env, evl)
+def eval_contents(expr: Union[BodyExpr, BeginExpr], env: Environment, evl: EvalRecurFuncType):
+    '''return the last expression'''
+    return pure_eval_sequence(expr.contents, env, evl)
 
 
 @eval_rule_decorator
@@ -1312,7 +1302,7 @@ def pure_eval_call_prim(expr: CallExpr, operator: PrimVal, operands: List[Scheme
         raise SchemeRuntimeError(expr.token, err.message)
 
 
-def pure_eval_call_proc_plain(expr: CallExpr, operator: ProcPlainVal, operands: List[SchemeVal], evl: EvalFuncType):
+def pure_eval_call_proc_plain(expr: CallExpr, operator: ProcPlainVal, operands: List[SchemeVal], evl: EvalRecurFuncType):
     if len(operator.parameters) != len(operands):
         raise SchemeRuntimeError(expr.token, '%s expect %d arguments, get %d' % (
             operator.name, len(operator.parameters), len(operands)))
@@ -1326,7 +1316,7 @@ def pure_eval_call_invalid(expr: CallExpr, operator: SchemeVal):
 
 
 @eval_rule_decorator
-def eval_call(expr: CallExpr, env: Environment, evl: EvalFuncType):
+def eval_call(expr: CallExpr, env: Environment, evl: EvalRecurFuncType):
     operator = evl(expr.operator, env)
     operands = [evl(subexpr, env) for subexpr in expr.operands]
     if isinstance(operator, PrimVal):
@@ -1346,7 +1336,7 @@ def pure_eval_set(name_expr: SymbolExpr, initializer: SchemeVal, env: Environmen
 
 
 @eval_rule_decorator
-def eval_set(expr: SetExpr, env: Environment, evl: EvalFuncType):
+def eval_set(expr: SetExpr, env: Environment, evl: EvalRecurFuncType):
     '''return the value just set'''
     initializer = evl(expr.initializer, env)
     return pure_eval_set(expr.name, initializer, env)
@@ -1365,7 +1355,7 @@ def pure_eval_define_proc_plain(name_expr: SymbolExpr, para_exprs: List[SymbolEx
 
 
 @eval_rule_decorator
-def eval_define_var(expr: DefineVarExpr, env: Environment, evl: EvalFuncType):
+def eval_define_var(expr: DefineVarExpr, env: Environment, evl: EvalRecurFuncType):
     '''return the symbol defined'''
     initializer = evl(expr.initializer, env)
     return pure_eval_define_var(expr.name, initializer, env)
@@ -1378,7 +1368,7 @@ def eval_define_proc(expr: DefineProcExpr, env: Environment):
 
 
 @eval_rule_decorator
-def eval_if(expr: IfExpr, env: Environment, evl: EvalFuncType):
+def eval_if(expr: IfExpr, env: Environment, evl: EvalRecurFuncType):
     '''return the successful branch'''
     pred_val = evl(expr.pred, env)
     if is_truthy(pred_val):
@@ -1388,19 +1378,13 @@ def eval_if(expr: IfExpr, env: Environment, evl: EvalFuncType):
 
 
 @eval_rule_decorator
-def eval_begin(expr: BeginExpr, env: Environment, evl: EvalFuncType):
-    '''return the last expression'''
-    return pure_eval_sequence(expr.contents, env, evl)
-
-
-@eval_rule_decorator
 def eval_lambda(expr: LambdaExpr, env: Environment):
     '''return the procedure itself'''
     return ProcPlainVal('lambda', [p.token.literal for p in expr.parameters], expr.body, env)
 
 
 @eval_rule_decorator
-def eval_and(expr: AndExpr, env: Environment, evl: EvalFuncType):
+def eval_and(expr: AndExpr, env: Environment, evl: EvalRecurFuncType):
     '''return the first false, otherwise the last'''
     for subexpr in expr.contents:
         res = evl(subexpr, env)
@@ -1410,7 +1394,7 @@ def eval_and(expr: AndExpr, env: Environment, evl: EvalFuncType):
 
 
 @eval_rule_decorator
-def eval_or(expr: OrExpr, env: Environment, evl: EvalFuncType):
+def eval_or(expr: OrExpr, env: Environment, evl: EvalRecurFuncType):
     '''return the first true, otherwise the last'''
     for subexpr in expr.contents:
         res = evl(subexpr, env)
@@ -1419,14 +1403,14 @@ def eval_or(expr: OrExpr, env: Environment, evl: EvalFuncType):
     return res
 
 
-def eval_not(expr: NotExpr, env: Environment, evl: EvalFuncType):
+def eval_not(expr: NotExpr, env: Environment, evl: EvalRecurFuncType):
     res = evl(expr.content, env)
     return BooleanVal(False) if is_truthy(res) else BooleanVal(True)
 
 
-def make_eval_rules():
-    return {
-        BodyExpr: eval_body,
+def install_eval_rules():
+    rules = {
+        BodyExpr: eval_contents,
         SymbolExpr: eval_symbol,
         StringExpr: eval_string,
         NumberExpr: eval_number,
@@ -1438,12 +1422,13 @@ def make_eval_rules():
         DefineVarExpr: eval_define_var,
         DefineProcExpr: eval_define_proc,
         IfExpr: eval_if,
-        BeginExpr: eval_begin,
+        BeginExpr: eval_contents,
         LambdaExpr: eval_lambda,
         AndExpr: eval_and,
         OrExpr: eval_or,
         NotExpr: eval_not
     }
+    update_eval_rules(rules)
 
 
 '''primitive definitions'''
@@ -1558,13 +1543,13 @@ def make_primitives():
 '''initialize test'''
 
 
-def setup_rules():
-    update_parser_list_rules(make_parser_list_rules())
-    update_stringify_expr_rules(make_stringify_expr_rules())
-    update_stringify_value_rules(make_stringify_value_rules())
-    update_is_equal_rules(make_is_equal_rules())
-    update_quote_rules(make_quote_rules())
-    update_eval_rules(make_eval_rules())
+def install_rules():
+    install_parser_list_rules()
+    install_stringify_expr_rules()
+    install_stringify_value_rules()
+    install_is_equal_rules()
+    install_quote_rules()
+    install_eval_rules()
 
 
 def make_global_env():
@@ -1812,7 +1797,6 @@ def test_eval():
 
 
 def test():
-    setup_rules()
     test_scan()
     test_parse()
     test_env()
@@ -1820,4 +1804,5 @@ def test():
 
 
 if __name__ == '__main__':
+    install_rules()
     test()
