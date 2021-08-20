@@ -9,12 +9,24 @@ then Parser transforms tokens to a scheme expression tree
 we do not stop parsing at list level, instead we further parse list into call, if, define_var
 the root of the resultant tree is a body expression, emcompassing all top level expressions
 finally this expression tree is evaluated directly
+
+we use simple class to represent token, expression, value
+token is so simple and not likely to change, so we use single class for it, and add stringify method directly as __str__
+expression and value are extensible, so we use more complex strategy
+we use different derived class for different types, to facilitate static type checking
+we implement operations (stringify, is_equal, quote, evaluate) as functions outside class
+
+this functions are extensible by rules, and the rules are defined in global variable to defer configuration
+e.g. we can define eval_quote() based on quote_expr(), then update_quote_rules() later 
+  if we were to recreate the rules every time, we have to first define quote_expr() with rules, then define eval_quote() with quote_expr()
+  each time we need to create a class instance or a closure
+
 '''
 
 import sys
 import inspect
 import enum
-from typing import Any, Callable, ClassVar, Dict, List, Optional, Set, Tuple, Type, TypeVar, Union, cast
+from typing import Any, Callable, ClassVar, Dict, List, Optional, Set, Type, TypeVar, Union, cast
 
 
 '''basic formatting'''
@@ -29,6 +41,19 @@ def format_float(x: float):
 
 def format_bool(x: bool):
     return '#t' if x else '#f'
+
+
+'''dynamic dispatching by type'''
+
+
+def find_type(cur_type: Type[object], type_dict: Dict[Type, Any]):
+    '''searching cur_type in the type hierarchy, until finding a base class in type_dict'''
+    while cur_type != object:
+        if cur_type in type_dict:
+            return cur_type
+        else:
+            cur_type = cur_type.__base__
+    return cur_type
 
 
 '''
@@ -101,11 +126,23 @@ class TokenTag(enum.Enum):
 
 
 class Token:
+    '''token is simple and relatively fixed, we won't use different classes'''
+
     def __init__(self, tag: TokenTag, line: int, lexeme: str, literal):
         self.tag = tag
         self.line = line
         self.lexeme = lexeme
         self.literal = literal
+
+    def __str__(self) -> str:
+        if self.tag == TokenTag.NUMBER:
+            return '%s:%s' % (self.tag.name, format_float(self.literal))
+        elif self.tag == TokenTag.STRING or self.tag == TokenTag.SYMBOL:
+            return '%s:%s' % (self.tag.name, self.literal)
+        elif self.tag == TokenTag.BOOLEAN:
+            return '%s:%s' % (self.tag.name, format_bool(self.literal))
+        else:
+            return self.tag.name
 
 
 class SchemeScannerError(Exception):
@@ -113,7 +150,7 @@ class SchemeScannerError(Exception):
         self.line = line
         self.message = message
 
-    def __str__(self):
+    def __str__(self) -> str:
         return 'scanner error in line %d: %s' % (self.line+1, self.message)
 
 
@@ -243,50 +280,11 @@ class Scanner:
         return c.isspace() or c == '(' or c == ')'
 
 
-class TokenStringifier:
-    '''convert token into string'''
-
-    _rules: Dict[TokenTag, Callable[[Token], str]]
-
-    def __init__(self):
-        self._rules = {
-            TokenTag.LEFT_PAREN: self._stringify_other,
-            TokenTag.RIGHT_PAREN: self._stringify_other,
-            TokenTag.QUOTE: self._stringify_other,
-            TokenTag.SYMBOL: self._stringify_string,
-            TokenTag.STRING: self._stringify_string,
-            TokenTag.NUMBER: self._stringify_number,
-            TokenTag.BOOLEAN: self._stringify_boolean,
-        }
-
-    def stringify(self, token: Token):
-        f = self._rules[token.tag]
-        return f(token)
-
-    def _stringify_number(self, token: Token):
-        return '%s:%s' % (token.tag.name, format_float(token.literal))
-
-    def _stringify_string(self, token: Token):
-        return '%s:%s' % (token.tag.name, token.literal)
-
-    def _stringify_boolean(self, token: Token):
-        return '%s:%s' % (token.tag.name, format_bool(token.literal))
-
-    def _stringify_other(self, token: Token):
-        return token.tag.name
+_scanner = Scanner()
 
 
-'''
-we only need one TokenStringifier
-so let's declare its instance
-and wrap it in stringify_token
-'''
-
-_token_stringifier = TokenStringifier()
-
-
-def stringify_token(token: Token):
-    return _token_stringifier.stringify(token)
+def scan_source(source: str):
+    return _scanner.scan(source)
 
 
 '''
@@ -300,8 +298,23 @@ class Expression:
     pass
 
 
+'''GenericExpr seem to equivalent to Any, maybe later implementation will fix this'''
+GenericExpr = TypeVar('GenericExpr', bound=Expression)
+
+
 class SchemeVal:
+    '''
+    schemeVal defaults to be truthy, including 0, (), nil
+    the only thing not truthy is #f
+    we should declare this with vode below, but since object follows this rule, so no need to declare
+
+    def __bool__(self) -> bool:
+        return True
+    '''
     pass
+
+
+GenericVal = TypeVar('GenericVal', bound=SchemeVal)
 
 
 class SchemeEnvError(Exception):
@@ -402,72 +415,13 @@ class BodyExpr(Expression):
         self.expressions = expressions
 
 
-class ExprStringifier:
-    '''convert expression into string'''
-
-    # instance vars
-    _rules: Dict[Type, Callable[[Expression], str]]
-
-    def __init__(self):
-        self._rules = {
-            SymbolExpr: self._stringify_symbol,
-            StringExpr: self._stringify_string,
-            NumberExpr: self._stringify_number,
-            BooleanExpr: self._stringify_boolean,
-            BodyExpr: self._stringify_body
-        }
-
-    def stringify(self, expr: Expression):
-        if type(expr) in self._rules:
-            return self._rules[type(expr)](expr)
-        else:
-            return self._stringify_list(cast(ListExpr, expr))
-
-    def _stringify_symbol(self, expr: SymbolExpr):
-        return expr.token.literal
-
-    def _stringify_string(self, expr: StringExpr):
-        return '"%s"' % expr.token.literal
-
-    def _stringify_number(self, expr: NumberExpr):
-        return format_float(expr.token.literal)
-
-    def _stringify_boolean(self, expr: BooleanExpr):
-        return format_bool(expr.token.literal)
-
-    def _stringify_body(self, expr: BodyExpr):
-        '''very similar to _stringify_list, just without outer ()'''
-        substrs = [self.stringify(subexpr) for subexpr in expr.expressions]
-        return ' '.join(substrs)
-
-    def _stringify_list(self, expr: ListExpr):
-        substrs = [self.stringify(subexpr) for subexpr in expr.expressions]
-        return '(%s)' % (' '.join(substrs))
-
-
-'''
-we only need one ExprStringifier
-so let's declare its instance
-and wrap it in stringify_expr
-'''
-
-_expr_stringifier = ExprStringifier()
-
-
-def stringify_expr(expr: Expression):
-    return _expr_stringifier.stringify(expr)
-
-
 class SchemeParserError(Exception):
-    def __init__(self, token: Optional[Token], message: str):
+    def __init__(self, token: Token, message: str):
         self.token = token
         self.message = message
 
-    def __str__(self):
-        if self.token is not None:
-            return 'parser error at %s in line %d: %s' % (stringify_token(self.token), self.token.line+1, self.message)
-        else:
-            return 'parser error: %s' % (self.message)
+    def __str__(self) -> str:
+        return 'parser error at %s in line %d: %s' % (str(self.token), self.token.line+1, self.message)
 
 
 class Parser:
@@ -481,13 +435,13 @@ class Parser:
     list -> LEFT_PAREN ( expression )* RIGHT_PAREN;
     '''
 
-    _rules: Dict[TokenTag, Callable[[Token], Expression]]
+    _token_rules: Dict[TokenTag, Callable[[Token], Expression]]
     _list_rules: Dict[str, Callable[[ListExpr], Expression]]
     _tokens: List[Token]
     _current: int
 
-    def __init__(self, list_rules):
-        self._rules = {
+    def __init__(self):
+        self._token_rules = {
             TokenTag.SYMBOL: self._parse_symbol,
             TokenTag.NUMBER: self._parse_number,
             TokenTag.STRING: self._parse_string,
@@ -496,8 +450,11 @@ class Parser:
             TokenTag.LEFT_PAREN: self._parse_left_paren,
             TokenTag.RIGHT_PAREN: self._parse_right_paren
         }
-        self._list_rules = list_rules
+        self._list_rules = {}
         self._restart([])
+
+    def update_list_rules(self, rules: Dict[str, Callable[[ListExpr], Expression]]):
+        self._list_rules.update(rules)
 
     def parse(self, tokens: List[Token]):
         self._restart(tokens)
@@ -516,7 +473,7 @@ class Parser:
 
     def _parse_recursive(self) -> Expression:
         token = self._advance()
-        return self._rules[token.tag](token)
+        return self._token_rules[token.tag](token)
 
     def _parse_symbol(self, token: Token):
         return SymbolExpr(token)
@@ -571,6 +528,17 @@ class Parser:
         return self.tokens[self.current]
 
 
+_parser = Parser()
+
+
+def parse_tokens(tokens: List[Token]):
+    return _parser.parse(tokens)
+
+
+def update_parser_list_rules(rules: Dict[str, Callable[[ListExpr], Expression]]):
+    _parser.update_list_rules(rules)
+
+
 '''
 list parsing rules
 we extract information from list statically
@@ -581,7 +549,7 @@ so no need to parse list at runtime, as in chap 4.1.2
 
 class NilExpr(ListExpr):
     def __init__(self, expr: ListExpr):
-        ListExpr.__init__(self, expr.token, expr.expressions)
+        super().__init__(expr.token, expr.expressions)
 
 
 def parse_nil(expr: ListExpr):
@@ -590,7 +558,7 @@ def parse_nil(expr: ListExpr):
 
 class CallExpr(ListExpr):
     def __init__(self, expr: ListExpr, operator: Expression, operands: List[Expression]):
-        ListExpr.__init__(self, expr.token, expr.expressions)
+        super().__init__(expr.token, expr.expressions)
         self.operator = operator
         self.operands = operands
 
@@ -605,7 +573,7 @@ def parse_call(expr: ListExpr):
 
 class QuoteExpr(ListExpr):
     def __init__(self, expr: ListExpr, content: Expression):
-        ListExpr.__init__(self, expr.token, expr.expressions)
+        super().__init__(expr.token, expr.expressions)
         self.content = content
 
 
@@ -618,7 +586,7 @@ def parse_quote(expr: ListExpr):
 
 class SetExpr(ListExpr):
     def __init__(self, expr: ListExpr, name: SymbolExpr, initializer: Expression):
-        ListExpr.__init__(self, expr.token, expr.expressions)
+        super().__init__(expr.token, expr.expressions)
         self.name = name
         self.initializer = initializer
 
@@ -634,14 +602,14 @@ def parse_set(expr: ListExpr):
 
 class DefineVarExpr(ListExpr):
     def __init__(self, expr: ListExpr, name: SymbolExpr, initializer: Expression):
-        ListExpr.__init__(self, expr.token, expr.expressions)
+        super().__init__(expr.token, expr.expressions)
         self.name = name
         self.initializer = initializer
 
 
 class DefineProcExpr(ListExpr):
     def __init__(self, expr: ListExpr, name: SymbolExpr, parameters: List[SymbolExpr], body: List[Expression]):
-        ListExpr.__init__(self, expr.token, expr.expressions)
+        super().__init__(expr.token, expr.expressions)
         self.name = name
         self.parameters = parameters
         self.body = body
@@ -682,7 +650,7 @@ def parse_define(expr: ListExpr):
 
 class IfExpr(ListExpr):
     def __init__(self, expr: ListExpr, pred: Expression, then_branch: Expression, else_branch: Expression):
-        ListExpr.__init__(self, expr.token, expr.expressions)
+        super().__init__(expr.token, expr.expressions)
         self.pred = pred
         self.then_branch = then_branch
         self.else_branch = else_branch
@@ -700,7 +668,7 @@ def parse_if(expr: ListExpr):
 
 class BeginExpr(ListExpr):
     def __init__(self, expr: ListExpr, contents: List[Expression]):
-        ListExpr.__init__(self, expr.token, expr.expressions)
+        super().__init__(expr.token, expr.expressions)
         self.contents = contents
 
 
@@ -713,7 +681,7 @@ def parse_begin(expr: ListExpr):
 
 class LambdaExpr(ListExpr):
     def __init__(self, expr: ListExpr, parameters: List[SymbolExpr], body: List[Expression]):
-        ListExpr.__init__(self, expr.token, expr.expressions)
+        super().__init__(expr.token, expr.expressions)
         self.parameters = parameters
         self.body = body
 
@@ -738,7 +706,7 @@ def parse_lambda(expr: ListExpr):
 
 class AndExpr(ListExpr):
     def __init__(self, expr: ListExpr, contents: List[Expression]):
-        ListExpr.__init__(self, expr.token, expr.expressions)
+        super().__init__(expr.token, expr.expressions)
         self.contents = contents
 
 
@@ -751,7 +719,7 @@ def parse_and(expr: ListExpr):
 
 class OrExpr(ListExpr):
     def __init__(self, expr: ListExpr, contents: List[Expression]):
-        ListExpr.__init__(self, expr.token, expr.expressions)
+        super().__init__(expr.token, expr.expressions)
         self.contents = contents
 
 
@@ -764,7 +732,7 @@ def parse_or(expr: ListExpr):
 
 class NotExpr(ListExpr):
     def __init__(self, expr: ListExpr, content: Expression):
-        ListExpr.__init__(self, expr.token, expr.expressions)
+        super().__init__(expr.token, expr.expressions)
         self.content = content
 
 
@@ -796,6 +764,80 @@ def make_parser_list_rules():
     }
 
 
+'''expression stringifier'''
+
+_stringify_expr_rules: Dict[Type, Callable[[Expression], str]] = {}
+
+
+def update_stringify_expr_rules(rules: Dict[Type, Callable[[Expression], str]]):
+    _stringify_expr_rules.update(rules)
+
+
+def stringify_expr(expr: Expression):
+    t = find_type(type(expr), _stringify_expr_rules)
+    f = _stringify_expr_rules[t]
+    return f(expr)
+
+
+StringifyExprRuleFunc = Union[
+    Callable[[], SchemeVal],
+    Callable[[GenericExpr], str],
+]
+
+
+def stringify_expr_rule_decorator(rule_func: StringifyExprRuleFunc):
+    arity = len(inspect.getfullargspec(rule_func).args)
+
+    def _stringify_expr_rule_wrapped(expr: Expression):
+        args: List[Any] = [expr]
+        return rule_func(*args[0:arity])
+    return _stringify_expr_rule_wrapped
+
+
+@stringify_expr_rule_decorator
+def stringify_expr_symbol(expr: SymbolExpr):
+    return expr.token.literal
+
+
+@stringify_expr_rule_decorator
+def stringify_expr_string(expr: StringExpr):
+    return '"%s"' % expr.token.literal
+
+
+@stringify_expr_rule_decorator
+def stringify_expr_number(expr: NumberExpr):
+    return format_float(expr.token.literal)
+
+
+@stringify_expr_rule_decorator
+def stringify_expr_boolean(expr: BooleanExpr):
+    return format_bool(expr.token.literal)
+
+
+@stringify_expr_rule_decorator
+def stringify_expr_list(expr: ListExpr):
+    substrs = [stringify_expr(subexpr) for subexpr in expr.expressions]
+    return '(%s)' % (' '.join(substrs))
+
+
+@stringify_expr_rule_decorator
+def stringify_expr_body(expr: BodyExpr):
+    '''very similar to stringify_expr_list, just without outer ()'''
+    substrs = [stringify_expr(subexpr) for subexpr in expr.expressions]
+    return ' '.join(substrs)
+
+
+def make_stringify_expr_rules():
+    return {
+        SymbolExpr: stringify_expr_symbol,
+        StringExpr: stringify_expr_string,
+        NumberExpr: stringify_expr_number,
+        BooleanExpr: stringify_expr_boolean,
+        ListExpr: stringify_expr_list,
+        BodyExpr: stringify_expr_body
+    }
+
+
 '''
 scheme value definitions
 
@@ -811,6 +853,14 @@ to convert expression to the "same" value
 empty list is represented as special nil expression
 non-empty list is represented as pairs
 '''
+
+
+def value_equal_value(x: object, y: object):
+    return type(x) == type(y) and x.value == y.value  # type: ignore
+
+
+def value_equal(x: object, y: object):
+    return type(x) == type(y)
 
 
 class SymbolVal(SchemeVal):
@@ -863,131 +913,178 @@ class ProcVal(SchemeVal):
 
 
 class ProcPlainVal(ProcVal):
-    '''A simple implementation of procedure, later we will have another representation'''
+    '''
+    A simple implementation of procedure, later we will have another representation
+    its string representation inherit ProcVal's
+    '''
 
     def __init__(self, name: str, parameters: List[str], body: List[Expression], env: Environment):
-        ProcVal.__init__(self, name, parameters, env)
+        super().__init__(name, parameters, env)
         self.body = body
 
 
-class ValueStringifier:
-    '''convert value to string'''
+'''value stringifier'''
 
-    # instance vars
-    _rules: Dict[Type, Callable[[SchemeVal], str]]
-
-    def __init__(self):
-        self._rules = {
-            SymbolVal: self._stringify_symbol,
-            StringVal: self._stringify_string,
-            NumberVal: self._stringify_number,
-            BooleanVal: self._stringify_boolean,
-            NilVal: self._stringify_nil,
-            UndefVal: self._stringify_undef,
-            PairVal: self._stringify_pair,
-            ProcVal: self._stringify_procedure,
-            PrimVal: self._stringify_primitive,
-        }
-
-    def stringify(self, sv: SchemeVal):
-        f = self._rules[type(sv)]
-        return f(sv)
-
-    def _stringify_symbol(self, sv: SymbolVal):
-        return sv.value
-
-    def _stringify_string(self, sv: StringVal):
-        return sv.value
-
-    def _stringify_number(self, sv: NumberVal):
-        return format_float(sv.value)
-
-    def _stringify_boolean(self, sv: BooleanVal):
-        return format_bool(sv.value)
-
-    def _stringify_nil(self, sv: NilVal):
-        return '()'
-
-    def _stringify_undef(self, sv: UndefVal):
-        return '#<undef>'
-
-    def _stringify_pair(self, sv: PairVal):
-        left_str = self.stringify(sv.left)
-        right_str = self.stringify(sv.right)
-        if isinstance(sv.right, NilVal):
-            return '(%s)' % left_str
-        elif isinstance(sv.right, PairVal):
-            # right_str strip off paranthesis
-            return '(%s %s)' % (left_str, right_str[1:-1])
-        else:
-            return '(%s . %s)' % (left_str, right_str)
-
-    def _stringify_procedure(self, sv: ProcVal):
-        return '[procedure %s]' % sv.name
-
-    def _stringify_primitive(self, sv: PrimVal):
-        return '[primitive %s]' % sv.name
+_stringify_value_rules: Dict[Type, Callable[[SchemeVal], str]] = {}
 
 
-'''
-we only need one ValueStringifier
-so let's declare its instance
-and wrap it in stringify_value
-'''
-
-
-_value_stringifier = ValueStringifier()
+def update_stringify_value_rules(rules: Dict[Type, Callable[[SchemeVal], str]]):
+    _stringify_value_rules.update(rules)
 
 
 def stringify_value(sv: SchemeVal):
-    return _value_stringifier.stringify(sv)
+    t = find_type(type(sv), _stringify_value_rules)
+    f = _stringify_value_rules[t]
+    return f(sv)
 
 
-class EqualityChecker:
-    '''
-    check whether two values are equal
-    defined according to scheme's equal? procedure
-    '''
-
-    # instance vars
-    _rules: Dict[Type, Callable[[SchemeVal, SchemeVal], bool]]
-
-    def __init__(self):
-        self._rules = {
-            SymbolVal: self._check_literal,
-            StringVal: self._check_literal,
-            NumberVal: self._check_literal,
-            BooleanVal: self._check_literal,
-            NilVal: self._check_true,
-            UndefVal: self._check_true,
-            PairVal: self._check_object,
-            ProcVal: self._check_object,
-            PrimVal: self._check_object,
-        }
-
-    def check(self, x: SchemeVal, y: SchemeVal):
-        if type(x) == type(y):
-            f = self._rules[type(x)]
-            return f(x, y)
-        else:
-            return False
-
-    def _check_literal(self, x: Union[SymbolVal, StringVal, NumberVal, BooleanVal], y: Union[SymbolVal, StringVal, NumberVal, BooleanVal]):
-        return x.value == y.value
-
-    def _check_true(self, x: Union[NilVal, UndefVal], y: Union[NilVal, UndefVal]):
-        return True
-
-    def _check_object(self, x: Union[PairVal, PrimVal, ProcVal], y: Union[PairVal, PrimVal, ProcVal]):
-        return x == y
+StringifyValueRuleFunc = Union[
+    Callable[[], SchemeVal],
+    Callable[[GenericVal], str],
+]
 
 
-_equality_checker = EqualityChecker()
+def stringify_value_rule_decorator(rule_func: StringifyValueRuleFunc):
+    arity = len(inspect.getfullargspec(rule_func).args)
+
+    def _stringify_value_rule_wrapped(sv: SchemeVal):
+        args: List[Any] = [sv]
+        return rule_func(*args[0:arity])
+    return _stringify_value_rule_wrapped
+
+
+@stringify_value_rule_decorator
+def stringify_value_symbol(sv: SymbolVal):
+    return sv.value
+
+
+@stringify_value_rule_decorator
+def stringify_value_string(sv: StringVal):
+    return sv.value
+
+
+@stringify_value_rule_decorator
+def stringify_value_number(sv: NumberVal):
+    return format_float(sv.value)
+
+
+@stringify_value_rule_decorator
+def stringify_value_boolean(sv: BooleanVal):
+    return format_bool(sv.value)
+
+
+@stringify_value_rule_decorator
+def stringify_value_nil():
+    return '()'
+
+
+@stringify_value_rule_decorator
+def stringify_value_undef():
+    return '#<undef>'
+
+
+@stringify_value_rule_decorator
+def stringify_value_pair(sv: PairVal):
+    left_str = stringify_value(sv.left)
+    right_str = stringify_value(sv.right)
+    if isinstance(sv.right, NilVal):
+        return '(%s)' % left_str
+    elif isinstance(sv.right, PairVal):
+        # right_str strip off paranthesis
+        return '(%s %s)' % (left_str, right_str[1:-1])
+    else:
+        return '(%s . %s)' % (left_str, right_str)
+
+
+@stringify_value_rule_decorator
+def stringify_value_procedure(sv: ProcVal):
+    return '[procedure %s]' % sv.name
+
+
+@stringify_value_rule_decorator
+def stringify_value_primitive(sv: PrimVal):
+    return '[primitive %s]' % sv.name
+
+
+def make_stringify_value_rules():
+    return {
+        SymbolVal: stringify_value_symbol,
+        StringVal: stringify_value_string,
+        NumberVal: stringify_value_number,
+        BooleanVal: stringify_value_boolean,
+        NilVal: stringify_value_nil,
+        UndefVal: stringify_value_undef,
+        PairVal: stringify_value_pair,
+        ProcVal: stringify_value_procedure,
+        PrimVal: stringify_value_primitive,
+    }
+
+
+'''value equality checker'''
+
+EqualityFuncType = Callable[[SchemeVal, SchemeVal], bool]
+
+_is_equal_rules: Dict[Type, EqualityFuncType] = {}
+
+
+def update_is_equal_rules(rules: Dict[Type, EqualityFuncType]):
+    _is_equal_rules.update(rules)
 
 
 def is_equal(x: SchemeVal, y: SchemeVal):
-    '''to be used in primitive equal?'''
-    return _equality_checker.check(x, y)
+    if type(x) == type(y):
+        t = find_type(type(x), _is_equal_rules)
+        f = _is_equal_rules[t]
+        return f(x, y)
+    else:
+        return False
+
+
+IsEqualRuleFunc = Union[
+    Callable[[], SchemeVal],
+    Callable[[GenericVal, GenericVal], str],
+]
+
+
+def is_equal_rule_decorator(rule_func: IsEqualRuleFunc):
+    arity = len(inspect.getfullargspec(rule_func).args)
+
+    def _is_equal_rule_wrapped(x: SchemeVal, y: SchemeVal):
+        args: List[Any] = [x, y]
+        return rule_func(*args[0:arity])
+    return _is_equal_rule_wrapped
+
+
+@is_equal_rule_decorator
+def is_equal_literal(x: Union[SymbolVal, StringVal, NumberVal, BooleanVal], y: Union[SymbolVal, StringVal, NumberVal, BooleanVal]):
+    return x.value == y.value
+
+
+@is_equal_rule_decorator
+def is_equal_true():
+    return True
+
+
+@is_equal_rule_decorator
+def is_equal_object(x: Union[PairVal, PrimVal, ProcVal], y: Union[PairVal, PrimVal, ProcVal]):
+    return x == y
+
+
+def make_is_equal_rules():
+    return {
+        SymbolVal: is_equal_literal,
+        StringVal: is_equal_literal,
+        NumberVal: is_equal_literal,
+        BooleanVal: is_equal_literal,
+        NilVal: is_equal_true,
+        UndefVal: is_equal_true,
+        PairVal: is_equal_object,
+        ProcVal: is_equal_object,
+        PrimVal: is_equal_object,
+    }
+
+
+'''value equality checker'''
 
 
 def is_truthy(sv: SchemeVal):
@@ -1017,51 +1114,77 @@ def pair_length(sv: PairVal):
     return count
 
 
-class ExprQuoter:
-    '''
-    quote convert expression to value
-    rules cannot include body expression
-    '''
+'''
+quoter expression to value
+'''
 
-    # instance vars
-    _rules: Dict[Type, Callable[[Expression], SchemeVal]]
+QuoteFuncType = Callable[[Expression], SchemeVal]
 
-    def __init__(self):
-        self._rules = {
-            SymbolExpr: self._quote_symbol,
-            StringExpr: self._quote_string,
-            NumberExpr: self._quote_number,
-            BooleanExpr: self._quote_boolean,
-        }
-
-    def quote(self, expr: Expression):
-        if type(expr) in self._rules:
-            return self._rules[type(expr)](expr)
-        else:
-            return self._quote_list(cast(ListExpr, expr))
-
-    def _quote_symbol(self, expr: SymbolExpr):
-        return SymbolVal(expr.token.literal)
-
-    def _quote_string(self, expr: StringExpr):
-        return StringVal(expr.token.literal)
-
-    def _quote_number(self, expr: NumberExpr):
-        return NumberVal(expr.token.literal)
-
-    def _quote_boolean(self, expr: BooleanExpr):
-        return BooleanVal(expr.token.literal)
-
-    def _quote_list(self, expr: ListExpr):
-        subvals = [self.quote(subexpr) for subexpr in expr.expressions]
-        return pair_from_list(subvals)
+_quote_rules: Dict[Type, QuoteFuncType] = {}
 
 
-_expr_quoter = ExprQuoter()
+def update_quote_rules(rules: Dict[Type, QuoteFuncType]):
+    _quote_rules.update(rules)
 
 
 def quote_expr(expr: Expression):
-    return _expr_quoter.quote(expr)
+    t = find_type(type(expr), _quote_rules)
+    f = _quote_rules[t]
+    return f(expr)
+
+
+QuoteRuleFunc = Union[
+    Callable[[], SchemeVal],
+    Callable[[GenericExpr], SchemeVal],
+]
+
+
+def quote_rule_decorator(rule_func: QuoteRuleFunc):
+    arity = len(inspect.getfullargspec(rule_func).args)
+
+    def _quote_rule_wrapped(expr: Expression):
+        args: List[Any] = [expr]
+        return rule_func(*args[0:arity])
+    return _quote_rule_wrapped
+
+
+@quote_rule_decorator
+def quote_symbol(expr: SymbolExpr):
+    return SymbolVal(expr.token.literal)
+
+
+@quote_rule_decorator
+def quote_string(expr: StringExpr):
+    return StringVal(expr.token.literal)
+
+
+@quote_rule_decorator
+def quote_number(expr: NumberExpr):
+    return NumberVal(expr.token.literal)
+
+
+@quote_rule_decorator
+def quote_boolean(expr: BooleanExpr):
+    return BooleanVal(expr.token.literal)
+
+
+@quote_rule_decorator
+def quote_list(expr: ListExpr):
+    subvals = [quote_expr(subexpr) for subexpr in expr.expressions]
+    return pair_from_list(subvals)
+
+
+def make_quote_rules():
+    return {
+        SymbolExpr: quote_symbol,
+        StringExpr: quote_string,
+        NumberExpr: quote_number,
+        BooleanExpr: quote_boolean,
+        ListExpr: quote_list,
+    }
+
+
+'''evaluator'''
 
 
 class SchemePrimError(Exception):
@@ -1074,8 +1197,8 @@ class SchemeRuntimeError(Exception):
         self.token = token
         self.message = message
 
-    def __str__(self):
-        return 'runtime error at %s in line %d: %s' % (stringify_token(self.token), self.token.line+1, self.message)
+    def __str__(self) -> str:
+        return 'runtime error at %s in line %d: %s' % (str(self.token), self.token.line+1, self.message)
 
 
 EvalFuncType = Callable[[Expression, Environment], SchemeVal]
@@ -1094,11 +1217,14 @@ class Evaluator:
     we make evaluator object very simple, so that we can easily rewrite it later
     '''
 
-    _type_rules: Dict[Type, Callable[[
+    _rules: Dict[Type, Callable[[
         Expression, Environment, EvalFuncType], SchemeVal]]
 
-    def __init__(self, type_rules):
-        self._type_rules = type_rules
+    def __init__(self):
+        self._rules = {}
+
+    def update_rules(self, rules: Dict[Type, Callable[[Expression, Environment, EvalFuncType], SchemeVal]]):
+        self._rules.update(rules)
 
     def evaluate(self, expr: BodyExpr, env: Environment) -> SchemeVal:
         try:
@@ -1108,16 +1234,25 @@ class Evaluator:
         return res
 
     def _eval_recursive(self, expr: Expression, env: Environment) -> SchemeVal:
-        f = self._type_rules[type(expr)]
+        t = find_type(type(expr), self._rules)
+        f = self._rules[t]
         return f(expr, env, self._eval_recursive)
+
+
+_evaluator = Evaluator()
+
+
+def evaluate_expr(expr: BodyExpr, env: Environment):
+    return _evaluator.evaluate(expr, env)
+
+
+def update_eval_rules(rules: Dict[Type, Callable[[Expression, Environment, EvalFuncType], SchemeVal]]):
+    _evaluator.update_rules(rules)
 
 
 '''
 evaluator rule definitions
 '''
-
-# GenericExpr seem to equivalent to Any, maybe later implementation will fix this
-GenericExpr = TypeVar('GenericExpr', bound=Expression)
 
 EvalRuleFunc = Union[
     Callable[[], SchemeVal],
@@ -1297,7 +1432,7 @@ def eval_not(expr: NotExpr, env: Environment, evl: EvalFuncType):
     return BooleanVal(False) if is_truthy(res) else BooleanVal(True)
 
 
-def make_eval_type_rules():
+def make_eval_rules():
     return {
         BodyExpr: eval_body,
         SymbolExpr: eval_symbol,
@@ -1431,10 +1566,13 @@ def make_primitives():
 '''initialize test'''
 
 
-def make_parser():
-    list_rules = make_parser_list_rules()
-    parser = Parser(list_rules)
-    return parser
+def initialize_test():
+    update_parser_list_rules(make_parser_list_rules())
+    update_stringify_expr_rules(make_stringify_expr_rules())
+    update_stringify_value_rules(make_stringify_value_rules())
+    update_is_equal_rules(make_is_equal_rules())
+    update_quote_rules(make_quote_rules())
+    update_eval_rules(make_eval_rules())
 
 
 def make_global_env():
@@ -1442,12 +1580,6 @@ def make_global_env():
     primitives = make_primitives()
     register_primitives(glbenv, primitives)
     return glbenv
-
-
-def make_evaluator():
-    type_rules = make_eval_type_rules()
-    evaluator = Evaluator(type_rules)
-    return evaluator
 
 
 def test_one(source: str, **kargs: str):
@@ -1462,16 +1594,14 @@ def test_one(source: str, **kargs: str):
     print('* source: %s' % source)
     try:
         # scan
-        scanner = Scanner()
-        tokens = scanner.scan(source)
-        token_str = ', '.join([stringify_token(t) for t in tokens])
+        tokens = scan_source(source)
+        token_str = ', '.join([str(t) for t in tokens])
         print('* tokens: %s' % token_str)
         if 'tokens' in kargs:
             assert token_str == kargs['tokens']
 
         # parse
-        parser = make_parser()
-        expr = parser.parse(tokens)
+        expr = parse_tokens(tokens)
         expr_str = stringify_expr(expr)
         print('* expression: %s' % expr_str)
         if 'expression' in kargs:
@@ -1479,8 +1609,7 @@ def test_one(source: str, **kargs: str):
 
         # evaluate
         glbenv = make_global_env()
-        evaluator = make_evaluator()
-        result = evaluator.evaluate(expr, glbenv)
+        result = evaluate_expr(expr, glbenv)
         result_str = stringify_value(result)
         output_str = scheme_flush()
         if len(output_str):
@@ -1656,6 +1785,13 @@ def test_eval():
         ''',
         result='1'
     )
+    # return lambda to test find_type in ValueStringifier
+    test_one(
+        '''
+        (lambda () 1)
+        ''',
+        result='[procedure lambda]'
+    )
     # scope conflict
     # should error when we have resolver
     test_one(
@@ -1684,6 +1820,7 @@ def test_eval():
 
 
 def test():
+    initialize_test()
     test_scan()
     test_parse()
     test_env()
