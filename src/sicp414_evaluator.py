@@ -855,14 +855,6 @@ non-empty list is represented as pairs
 '''
 
 
-def value_equal_value(x: object, y: object):
-    return type(x) == type(y) and x.value == y.value  # type: ignore
-
-
-def value_equal(x: object, y: object):
-    return type(x) == type(y)
-
-
 class SymbolVal(SchemeVal):
     def __init__(self, value: str):
         self.value = value
@@ -1566,7 +1558,7 @@ def make_primitives():
 '''initialize test'''
 
 
-def initialize_test():
+def setup_rules():
     update_parser_list_rules(make_parser_list_rules())
     update_stringify_expr_rules(make_stringify_expr_rules())
     update_stringify_value_rules(make_stringify_value_rules())
@@ -1820,7 +1812,7 @@ def test_eval():
 
 
 def test():
-    initialize_test()
+    setup_rules()
     test_scan()
     test_parse()
     test_env()
