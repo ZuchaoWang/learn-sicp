@@ -1,8 +1,11 @@
 from sicp422_lazy_evaluator import install_rules, test_one
 
 def test():
-    test_one(
-      '''
+    # lcons the procedure equivalent for primitive cons, but supporting lazy pair and lazy list
+    # lcons does not force input parameters, therefore it allows lazy evaluation
+    # lcons is implemented via message-passing, it returns lazy pair as a procedure
+    # it has operations: lst-ref, lst-display-topn, lst-map, lst-add, lst-scale
+    shared_lib = '''
       (define (lcons a b)
         (lambda (op)
           (if (equal? op "car")
@@ -11,6 +14,12 @@ def test():
               b '()))))
       (define (lcar p) (p "car"))
       (define (lcdr p) (p "cdr"))
+
+      (define (lst-ref p n)
+        (if (null? p)
+          '()
+          (if (= n 0) (lcar p)
+            (lst-ref (lcdr p) (- n 1)))))
 
       (define (lst-display-topn p n)
         (define (lst-display-topn-iter q m)
@@ -22,16 +31,24 @@ def test():
                 (lst-display-topn-iter (lcdr q) (- m 1))))))
         (lst-display-topn-iter p n))
 
+      (define (lst-map f p)
+        (if (null? p)
+          '()
+          (lcons (f (lcar p)) (lazy (lst-map f (lcdr p))))))
+
       (define (lst-add p1 p2)
         (if (or (null? p1) (null? p2))
           '()
           (lcons (+ (lcar p1) (lcar p2)) (lazy (lst-add (lcdr p1) (lcdr p2))))))
 
       (define (lst-scale p s)
-        (if (null? p)
-          '()
-          (lcons (* (lcar p) s) (lazy (lst-scale (lcdr p) s)))))
-
+        (define (f x) (* x s))
+        (lst-map f p))
+    '''
+    # infinite stream can be defined recursively via lazy
+    # finite list and infinite stream share the same lst-scale function
+    test_one(shared_lib + \
+      '''
       (define ls-ints (lcons 1 (lcons 2 (lcons 3 (lcons 4 '())))))
       (define ls-evens (lst-scale ls-ints 2))
       (display "ls-evens: ")
@@ -47,6 +64,26 @@ def test():
       ''',
       output='ls-evens: 2 4 6 8\nst-evens: 2 4 6 8',
       result='#<undef>'
+    )
+    # calculateing natural e, see sicp354_diff_equation.py
+    # unfortunately, without tail recursion optimization, max stack depth easily exceeded
+    # that's why we can only use small steps, and cannot get very accurate
+    test_one(shared_lib + \
+      '''
+      (define (solve f y0 dt)
+        (define y (lcons y0 (lazy (lst-add y (lst-scale dy dt)))))
+        (define dy (lst-map f y))
+        y)
+      (define (f y) y)
+      (define steps 50)
+      (define st-e (solve f 1 (/ 1 steps)))
+      (define e1 (lst-ref st-e steps))
+      
+      (display "e = ")
+      (display e1)
+      (and (> e1 2.69) (< e1 2.74))
+      ''',
+      result='#t'
     )
 
 if __name__ == '__main__':
