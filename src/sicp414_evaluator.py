@@ -1403,6 +1403,7 @@ def eval_or(expr: OrExpr, env: Environment, evl: EvalRecurFuncType):
     return res
 
 
+@eval_rule_decorator
 def eval_not(expr: NotExpr, env: Environment, evl: EvalRecurFuncType):
     res = evl(expr.content, env)
     return BooleanVal(False) if is_truthy(res) else BooleanVal(True)
