@@ -1505,12 +1505,12 @@ def prim_cons(x: SchemeVal, y: SchemeVal):
     return PairVal(x, y)
 
 
-def prim_pair(x: SchemeVal):
-    return isinstance(x, PairVal)
+def prim_pair(x: SchemeVal) -> BooleanVal:
+    return BooleanVal(isinstance(x, PairVal))
 
 
-def prim_null(x: SchemeVal):
-    return isinstance(x, NilVal)
+def prim_null(x: SchemeVal) -> BooleanVal:
+    return BooleanVal(isinstance(x, NilVal))
 
 
 def prim_display(sv: SchemeVal):
