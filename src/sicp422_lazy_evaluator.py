@@ -236,15 +236,9 @@ def test_one(source: str, **kargs: str):
         print('* result: %s' % result_str)
         if 'result' in kargs:
             assert result_str == kargs['result']
-    except Exception as err:
-        if isinstance(err, SchemePanic):
-            print('* panic: %s' % err.message)
-            assert err.message == kargs['panic']
-        else:
-            # catch python error, but not sure whether str(err) will change in different version
-            # so not encouraged to check this
-            print('* panic: %s' % str(err))
-            assert str(err) == kargs['panic']
+    except SchemePanic as err:
+        print('* panic: %s' % err.message)
+        assert err.message == kargs['panic']
 
     print('----------')
 
