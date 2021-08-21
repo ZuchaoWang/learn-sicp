@@ -1,23 +1,26 @@
 '''
 analyzer turns expression into a self-evaluating function
-it saves the effort for reparsing expression every time it executes
-can be useful for procedure body, and loop
-but I feel deeply nested functions is harder to debug than deeply nested expression
-so I would recommend turning it into object rather than function
+potentially save the effort to parse expression every time it executes
+in fact, it might not be that useful, since we have already parsed list expression
+but it's fun, so let's implement it
+
+anyway, I feel deeply nested functions harder to debug than deeply nested expression
+so I do not recommend this step
 '''
 
 
 import inspect
-from typing import Any, Callable, Dict, List, Tuple, Type, Union, cast
+from typing import Any, Callable, Dict, List, Type, Union
 
-from sicp414_evaluator import BooleanExpr, BooleanVal, Environment, Expression, ListExpr, NilVal, NumberExpr, NumberVal, \
-    Parser, PrimVal, ProcVal, Scanner, SchemePanic, SchemeReparseError, SchemeRuntimeError, \
-    SchemeVal, SymbolVal, UndefVal, StringExpr, StringVal, SymbolExpr, Token, env_define, env_extend, is_truthy, \
-    make_global_env, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_define_var, quote_expr, \
-    reparse_and, reparse_begin, reparse_call, reparse_define, reparse_if, \
-    reparse_lambda, reparse_not, reparse_or, reparse_quote, reparse_set, \
-    scheme_flush, scheme_panic, stringify_token, stringify_value
-from sicp416_resolver import ResolveDistancesType, make_resolver, pure_resolved_eval_set, pure_resolved_eval_symbol
+from sicp414_evaluator import AndExpr, BeginExpr, BodyExpr, BooleanExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, \
+    Environment, Expression, GenericExpr, IfExpr, LambdaExpr, ListExpr, NilExpr, NilVal, NotExpr, NumberExpr, NumberVal, OrExpr, \
+    PrimVal, ProcVal, QuoteExpr, SchemePanic, SchemeRuntimeError, SchemeVal, SetExpr, SymbolVal, UndefVal, \
+    StringExpr, StringVal, SymbolExpr, Token, env_define, env_extend, find_type, \
+    install_is_equal_rules, install_parser_list_rules, install_quote_rules, \
+    install_stringify_expr_rules, install_stringify_value_rules, is_truthy, \
+    make_global_env, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_define_var, \
+    quote_expr, scan_source, scheme_flush, scheme_panic, stringify_value
+from sicp416_resolver import ResDistancesType, install_resolver_rules, pure_resolved_eval_set, pure_resolved_eval_symbol, resolve_expr
 
 
 class SchemeAnalysisError(Exception):
@@ -26,17 +29,91 @@ class SchemeAnalysisError(Exception):
         self.message = message
 
     def __str__(self):
-        return 'analysis error at %s in line %d: %s' % (stringify_token(self.token), self.token.line+1, self.message)
+        return 'analysis error at %s in line %d: %s' % (str(self.token), self.token.line+1, self.message)
 
 
 EvaluableType = Callable[[Environment], SchemeVal]
-AnalyzeFuncType = Callable[[Expression, ResolveDistancesType], EvaluableType]
+AnalRecurFuncType = Callable[[Expression], EvaluableType]
+AnalFuncType = Callable[[Expression, AnalRecurFuncType,
+                         ResDistancesType], EvaluableType]
+
+_analyzer_rules: Dict[Type, AnalFuncType] = {}
 
 
-def pure_analyze_sequence(expr_list: List[Expression], distances: ResolveDistancesType, analyze: AnalyzeFuncType):
+def update_analyzer_rules(rules: Dict[Type, AnalFuncType]):
+    _analyzer_rules.update(rules)
+
+
+def analyze_expr(expr: BodyExpr, distances: ResDistancesType):
+    def analyze_recursive(expr: Expression):
+        t = find_type(type(expr), _analyzer_rules)
+        f = _analyzer_rules[t]
+        return f(expr, analyze_recursive, distances)
+
+    try:
+        eval = analyze_recursive(expr)
+
+        def _evaluate(env: Environment):
+            try:
+                res = eval(env)
+            except SchemeRuntimeError as err:
+                scheme_panic(str(err))
+            return res
+    except SchemeAnalysisError as err:
+        scheme_panic(str(err))
+    return _evaluate
+
+
+'''analysis list rule definitions'''
+
+AnalRuleType = Union[
+    Callable[[], EvaluableType],
+    Callable[[GenericExpr], EvaluableType],
+    Callable[[GenericExpr, AnalRecurFuncType], EvaluableType],
+    Callable[[GenericExpr, AnalRecurFuncType, ResDistancesType], EvaluableType]
+]
+
+
+def analyzer_rule_decorator(rule_func: AnalRuleType):
+    arity = len(inspect.getfullargspec(rule_func).args)
+
+    def _analyzer_rule_wrapped(expr: Expression, analyze: AnalRecurFuncType, distances: ResDistancesType):
+        args: List[Any] = [expr, analyze, distances]
+        return rule_func(*args[0:arity])
+    return _analyzer_rule_wrapped
+
+
+@analyzer_rule_decorator
+def analyze_symbol(expr: SymbolExpr, analyze: AnalRecurFuncType, distances: ResDistancesType):
+    def _evaluate(env: Environment):
+        return pure_resolved_eval_symbol(expr, env, distances)
+    return _evaluate
+
+
+@analyzer_rule_decorator
+def analyze_string(expr: StringExpr):
+    return lambda env: StringVal(expr.token.literal)
+
+
+@analyzer_rule_decorator
+def analyze_number(expr: NumberExpr):
+    return lambda env: NumberVal(expr.token.literal)
+
+
+@analyzer_rule_decorator
+def analyze_boolean(expr: BooleanExpr):
+    return lambda env: BooleanVal(expr.token.literal)
+
+
+@analyzer_rule_decorator
+def analyze_nil():
+    return lambda env: NilVal()
+
+
+def pure_analyze_sequence(expr_list: List[Expression], analyze: AnalRecurFuncType):
     evls: List[EvaluableType] = []
     for expr in expr_list:
-        evl = analyze(expr, distances)
+        evl = analyze(expr)
         evls.append(evl)
 
     def _evaluate(env: Environment):
@@ -47,107 +124,22 @@ def pure_analyze_sequence(expr_list: List[Expression], distances: ResolveDistanc
     return _evaluate
 
 
-class Analyzer:
-
-    _type_rules: Dict[Type, AnalyzeFuncType]
-    _list_rules: Dict[str, Callable[[
-        ListExpr, ResolveDistancesType, AnalyzeFuncType], EvaluableType]]
-
-    def __init__(self, list_rules):
-        self._type_rules = {
-            SymbolExpr: self._analyze_symbol,
-            StringExpr: self._analyze_string,
-            NumberExpr: self._analyze_number,
-            BooleanExpr: self._analyze_boolean,
-            ListExpr: self._analyze_list,
-        }
-        self._list_rules = list_rules
-
-    def analyze(self, expr_list: List[Expression], distances: ResolveDistancesType) -> EvaluableType:
-        try:
-            eval = pure_analyze_sequence(
-                expr_list, distances, self._analyze_recursive)
-
-            def _evaluate(env: Environment):
-                try:
-                    res = eval(env)
-                except SchemeRuntimeError as err:
-                    scheme_panic(str(err))
-                return res
-        except SchemeAnalysisError as err:
-            scheme_panic(str(err))
-        return _evaluate
-
-    def _analyze_recursive(self, expr: Expression, distances: ResolveDistancesType):
-        f = self._type_rules[type(expr)]
-        return f(expr, distances)
-
-    def _analyze_symbol(self, expr: SymbolExpr, distances: ResolveDistancesType):
-        def _evaluate(env: Environment):
-            return pure_resolved_eval_symbol(expr, env, distances)
-        return _evaluate
-
-    def _analyze_string(self, expr: StringExpr, distances: ResolveDistancesType):
-        return lambda env: StringVal(expr.token.literal)
-
-    def _analyze_number(self, expr: NumberExpr, distances: ResolveDistancesType):
-        return lambda env: NumberVal(expr.token.literal)
-
-    def _analyze_boolean(self, expr: BooleanExpr, distances: ResolveDistancesType):
-        return lambda env: BooleanVal(expr.token.literal)
-
-    def _analyze_list(self, expr: ListExpr, distances: ResolveDistancesType):
-        if len(expr.expressions) == 0:
-            return lambda env: NilVal()
-        elif type(expr.expressions[0]) == SymbolExpr:
-            symbol_name = cast(SymbolExpr, expr.expressions[0]).token.literal
-            if symbol_name in self._list_rules:
-                return self._analyze_list_rule(symbol_name, expr, distances)
-        return self._analyze_list_rule('call', expr, distances)
-
-    def _analyze_list_rule(self, rule_name: str, expr: ListExpr, distances: ResolveDistancesType):
-        try:
-            f = self._list_rules[rule_name]
-            res = f(expr, distances, self._analyze_recursive)
-        except SchemeReparseError as err:
-            raise SchemeAnalysisError(err.token, err.message)
-        return res
+@analyzer_rule_decorator
+def analyze_contents(expr: Union[BodyExpr, BeginExpr], analyze: AnalRecurFuncType):
+    return pure_analyze_sequence(expr.contents, analyze)
 
 
-'''analyzed procedure value'''
+@analyzer_rule_decorator
+def analyze_quote(expr: QuoteExpr):
+    return lambda env: quote_expr(expr.content)
 
 
 class ProcAnalyzedVal(ProcVal):
     '''procedure body is a EvaluableType'''
 
     def __init__(self, name: str, parameters: List[str], body: EvaluableType, env: Environment):
-        ProcVal.__init__(self, name, parameters, env)
+        super().__init__(name, parameters, env)
         self.body = body
-
-
-'''analysis list rule definitions'''
-
-AnalyzeListRuleFunc = Union[
-    Callable[[], EvaluableType],
-    Callable[[ListExpr], EvaluableType],
-    Callable[[ListExpr, ResolveDistancesType], EvaluableType],
-    Callable[[ListExpr, ResolveDistancesType, AnalyzeFuncType], EvaluableType]
-]
-
-
-def analyze_list_rule_decorator(rule_func: AnalyzeListRuleFunc):
-    arity = len(inspect.getfullargspec(rule_func).args)
-
-    def _analyze_list_rule_wrapped(expr: ListExpr, distances: ResolveDistancesType, analyze: AnalyzeFuncType):
-        args: List[Any] = [expr, distances, analyze]
-        return rule_func(*args[0:arity])
-    return _analyze_list_rule_wrapped
-
-
-@analyze_list_rule_decorator
-def analyze_quote(expr: ListExpr):
-    content = reparse_quote(expr)
-    return lambda env: quote_expr(content)
 
 
 def pure_eval_call_proc_analyzed(expr: ListExpr, operator: ProcAnalyzedVal, operands: List[SchemeVal]):
@@ -158,11 +150,10 @@ def pure_eval_call_proc_analyzed(expr: ListExpr, operator: ProcAnalyzedVal, oper
     return operator.body(new_env)
 
 
-@analyze_list_rule_decorator
-def analyze_call(expr: ListExpr, distances: ResolveDistancesType, analyze: AnalyzeFuncType):
-    operator_expr, operand_exprs = reparse_call(expr)
-    operator_evl = analyze(operator_expr, distances)
-    operand_evls = [analyze(subexpr, distances) for subexpr in operand_exprs]
+@analyzer_rule_decorator
+def analyze_call(expr: CallExpr, analyze: AnalRecurFuncType):
+    operator_evl = analyze(expr.operator)
+    operand_evls = [analyze(subexpr) for subexpr in expr.operands]
 
     def _evaluate(env: Environment):
         operator = operator_evl(env)
@@ -176,14 +167,13 @@ def analyze_call(expr: ListExpr, distances: ResolveDistancesType, analyze: Analy
     return _evaluate
 
 
-@analyze_list_rule_decorator
-def analyze_set(expr: ListExpr, distances: ResolveDistancesType, analyze: AnalyzeFuncType):
-    name_expr, initializer_expr = reparse_set(expr)
-    initializer_evl = analyze(initializer_expr, distances)
+@analyzer_rule_decorator
+def analyze_set(expr: SetExpr, analyze: AnalRecurFuncType, distances: ResDistancesType):
+    initializer_evl = analyze(expr.initializer)
 
     def _evaluate(env: Environment):
         initializer = initializer_evl(env)
-        return pure_resolved_eval_set(name_expr, initializer, env, distances)
+        return pure_resolved_eval_set(expr.name, initializer, env, distances)
     return _evaluate
 
 
@@ -194,34 +184,30 @@ def pure_eval_define_proc_analyzed(name_expr: SymbolExpr, para_exprs: List[Symbo
     return SymbolVal(name_expr.token.literal)
 
 
-@analyze_list_rule_decorator
-def analyze_define(expr: ListExpr, distances: ResolveDistancesType, analyze: AnalyzeFuncType):
-    reparsed = reparse_define(expr)
-    if len(reparsed) == 2:  # define variable
-        name_expr, initializer_expr = cast(
-            Tuple[SymbolExpr, Expression], reparsed)
-        initializer_evl = analyze(initializer_expr, distances)
+@analyzer_rule_decorator
+def analyze_define_var(expr: DefineVarExpr, analyze: AnalRecurFuncType, distances: ResDistancesType):
+    initializer_evl = analyze(expr.initializer)
 
-        def _evaluate(env: Environment):
-            initializer = initializer_evl(env)
-            return pure_eval_define_var(name_expr, initializer, env)
-        return _evaluate
-    else:  # define procedure
-        name_expr, para_exprs, body_exprs = cast(
-            Tuple[SymbolExpr, List[SymbolExpr], List[Expression]], reparsed)
-        body_exprs_evl = pure_analyze_sequence(body_exprs, distances, analyze)
-
-        def _evaluate(env: Environment):
-            return pure_eval_define_proc_analyzed(name_expr, para_exprs, body_exprs_evl, env)
-        return _evaluate
+    def _evaluate(env: Environment):
+        initializer = initializer_evl(env)
+        return pure_eval_define_var(expr.name, initializer, env)
+    return _evaluate
 
 
-@analyze_list_rule_decorator
-def analyze_if(expr: ListExpr, distances: ResolveDistancesType, analyze: AnalyzeFuncType):
-    pred_expr, then_expr, else_expr = reparse_if(expr)
-    pred_evl = analyze(pred_expr, distances)
-    then_evl = analyze(then_expr, distances)
-    else_evl = analyze(else_expr, distances)
+@analyzer_rule_decorator
+def analyze_define_proc(expr: DefineProcExpr, analyze: AnalRecurFuncType):
+    body_evl = pure_analyze_sequence(expr.body, analyze)
+
+    def _evaluate(env: Environment):
+        return pure_eval_define_proc_analyzed(expr.name, expr.parameters, body_evl, env)
+    return _evaluate
+
+
+@analyzer_rule_decorator
+def analyze_if(expr: IfExpr, analyze: AnalRecurFuncType):
+    pred_evl = analyze(expr.pred)
+    then_evl = analyze(expr.then_branch)
+    else_evl = analyze(expr.else_branch)
 
     def _evaluate(env: Environment):
         if is_truthy(pred_evl(env)):
@@ -231,30 +217,22 @@ def analyze_if(expr: ListExpr, distances: ResolveDistancesType, analyze: Analyze
     return _evaluate
 
 
-@analyze_list_rule_decorator
-def analyze_begin(expr: ListExpr, distances: ResolveDistancesType, analyze: AnalyzeFuncType):
-    subexprs = reparse_begin(expr)
-    return pure_analyze_sequence(subexprs, distances, analyze)
-
-
-@analyze_list_rule_decorator
-def analyze_lambda(expr: ListExpr, distances: ResolveDistancesType, analyze: AnalyzeFuncType):
-    para_exprs, body_exprs = reparse_lambda(expr)
-    body_exprs_evl = pure_analyze_sequence(body_exprs, distances, analyze)
+@analyzer_rule_decorator
+def analyze_lambda(expr: LambdaExpr, analyze: AnalRecurFuncType):
+    body_evl = pure_analyze_sequence(expr.body, analyze)
 
     def _evaluate(env: Environment):
         return ProcAnalyzedVal('lambda', [
-            p.token.literal for p in para_exprs], body_exprs_evl, env)
+            p.token.literal for p in expr.parameters], body_evl, env)
     return _evaluate
 
 
-@analyze_list_rule_decorator
-def analyze_and(expr: ListExpr, distances: ResolveDistancesType, analyze: AnalyzeFuncType):
-    subexprs = reparse_and(expr)
-    operand_evls = [analyze(subexpr, distances) for subexpr in subexprs]
+@analyzer_rule_decorator
+def analyze_and(expr: AndExpr, analyze: AnalRecurFuncType):
+    evls = [analyze(subexpr) for subexpr in expr.contents]
 
     def _evaluate(env: Environment):
-        for evl in operand_evls:
+        for evl in evls:
             res = evl(env)
             if not is_truthy(res):
                 return res
@@ -262,13 +240,12 @@ def analyze_and(expr: ListExpr, distances: ResolveDistancesType, analyze: Analyz
     return _evaluate
 
 
-@analyze_list_rule_decorator
-def analyze_or(expr: ListExpr, distances: ResolveDistancesType, analyze: AnalyzeFuncType):
-    subexprs = reparse_or(expr)
-    operand_evls = [analyze(subexpr, distances) for subexpr in subexprs]
+@analyzer_rule_decorator
+def analyze_or(expr: OrExpr, analyze: AnalRecurFuncType):
+    evls = [analyze(subexpr) for subexpr in expr.contents]
 
     def _evaluate(env: Environment):
-        for evl in operand_evls:
+        for evl in evls:
             res = evl(env)
             if is_truthy(res):
                 return res
@@ -276,10 +253,9 @@ def analyze_or(expr: ListExpr, distances: ResolveDistancesType, analyze: Analyze
     return _evaluate
 
 
-@analyze_list_rule_decorator
-def analyze_not(expr: ListExpr, distances: ResolveDistancesType, analyze: AnalyzeFuncType):
-    subexpr = reparse_not(expr)
-    evl = analyze(subexpr, distances)
+@analyzer_rule_decorator
+def analyze_not(expr: NotExpr, analyze: AnalRecurFuncType):
+    evl = analyze(expr.content)
 
     def _evaluate(env: Environment):
         res = evl(env)
@@ -287,22 +263,37 @@ def analyze_not(expr: ListExpr, distances: ResolveDistancesType, analyze: Analyz
     return _evaluate
 
 
-def make_analyzer():
-    '''make custom analyzer, using list rules'''
-    list_rules = {
-        'quote': analyze_quote,
-        'call': analyze_call,
-        'set!': analyze_set,
-        'define': analyze_define,
-        'if': analyze_if,
-        'begin': analyze_begin,
-        'lambda': analyze_lambda,
-        'and': analyze_and,
-        'or': analyze_or,
-        'not': analyze_not
+def install_analyzer_rules():
+    rules = {
+        BodyExpr: analyze_contents,
+        SymbolExpr: analyze_symbol,
+        StringExpr: analyze_string,
+        NumberExpr: analyze_number,
+        BooleanExpr: analyze_boolean,
+        NilExpr: analyze_nil,
+        QuoteExpr: analyze_quote,
+        CallExpr: analyze_call,
+        SetExpr: analyze_set,
+        DefineVarExpr: analyze_define_var,
+        DefineProcExpr: analyze_define_proc,
+        IfExpr: analyze_if,
+        BeginExpr: analyze_contents,
+        LambdaExpr: analyze_lambda,
+        AndExpr: analyze_and,
+        OrExpr: analyze_or,
+        NotExpr: analyze_not
     }
-    analyzer = Analyzer(list_rules)
-    return analyzer
+    update_analyzer_rules(rules)
+
+
+def install_rules():
+    install_parser_list_rules()
+    install_stringify_expr_rules()
+    install_stringify_value_rules()
+    install_is_equal_rules()
+    install_quote_rules()
+    install_resolver_rules()
+    install_analyzer_rules()
 
 
 def test_one(source: str, **kargs: str):
@@ -317,20 +308,16 @@ def test_one(source: str, **kargs: str):
     print('* source: %s' % source)
     try:
         # scan
-        scanner = Scanner()
-        tokens = scanner.scan(source)
+        tokens = scan_source(source)
 
         # parse
-        parser = Parser()
-        expr_list = parser.parse(tokens)
+        expr = parse_tokens(tokens)
 
         # resolve
-        resolver = make_resolver()
-        distances = resolver.resolve(expr_list)
+        distances = resolve_expr(expr)
 
         # analyze
-        analyzer = make_analyzer()
-        evl = analyzer.analyze(expr_list, distances)
+        evl = analyze_expr(expr, distances)
 
         # evaluate
         glbenv = make_global_env()
@@ -435,4 +422,5 @@ def test():
 
 
 if __name__ == '__main__':
+    install_rules()
     test()

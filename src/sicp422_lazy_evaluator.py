@@ -15,7 +15,7 @@ we will not analyze the expression tree to create evaluate function, since that'
 
 from typing import Optional
 from sicp414_evaluator import Environment, EvalFuncType, Expression, ListExpr, PrimVal, ProcPlainVal, SchemeReparseError, SchemeVal, is_truthy, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_call_proc_plain, reparse_call, reparse_if
-from sicp416_resolver import ResolveDistancesType, ResolveFuncType, resolve_list_rule_decorator, resolved_eval_list_rule_decorator
+from sicp416_resolver import ResolveDistancesType, ResFuncType, resolve_list_rule_decorator, resolved_eval_list_rule_decorator
 
 def reparse_lazy(expr: ListExpr):
     '''reparse lazy from list expression'''
@@ -25,7 +25,7 @@ def reparse_lazy(expr: ListExpr):
     return expr.expressions[1]
 
 @resolve_list_rule_decorator
-def resolve_lazy(expr: ListExpr, phase: bool, resolve: ResolveFuncType):
+def resolve_lazy(expr: ListExpr, phase: bool, resolve: ResFuncType):
     '''extending resolver list rule to support lazy'''
     content = reparse_lazy(expr)
     resolve(content, phase)
