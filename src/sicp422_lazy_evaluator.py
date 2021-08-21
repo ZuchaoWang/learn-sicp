@@ -15,6 +15,17 @@ we will not analyze the expression tree to create evaluate function, since that'
 our lazy value is implemented via ThunkVal
 in following scenarios, ThunkVal will be forced:
 body result, operator, if-predicate, primitive procedure operands, sequence (except last expression)
+
+we will have to create an environment for lazy, this is a trick to avoid failure of current resolution
+for example, without creating environment, the following code will throw "local symbol used before initialization"
+(define (f)
+  (define a (lazy (+ b 1)))
+  (define b 1)
+  a)
+(f)
+other solutions exist though, but are more complex, for example:
+let proc add environment of distance 1, lazy add environment of distance 0
+we will not do that
 '''
 
 from typing import List, Optional
@@ -23,7 +34,7 @@ from sicp414_evaluator import AndExpr, BeginExpr, BodyExpr, BooleanVal, CallExpr
     SchemeVal, UndefVal, env_extend, install_is_equal_rules, install_parser_list_rules, install_quote_rules, install_stringify_expr_rules, \
     install_stringify_value_rules, is_truthy, make_global_env, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, \
     scan_source, scheme_flush, stringify_value, update_parser_list_rules
-from sicp416_resolver import ResRecurFuncType, install_resolved_eval_rules, install_resolver_rules, resolve_expr, \
+from sicp416_resolver import ResBindingsType, ResRecurFuncType, ResStackType, install_resolved_eval_rules, install_resolver_rules, resolve_expr, \
     resolved_eval_rule_decorator, resolved_eval_rule_decorator, resolved_evaluate_expr, resolver_rule_decorator, \
     update_resolved_eval_rules, update_resolver_rules
 
@@ -71,9 +82,13 @@ def force(sv: SchemeVal, evl: EvalRecurFuncType) -> SchemeVal:
 
 
 @resolver_rule_decorator
-def resolve_lazy(expr: LazyExpr, phase: bool, resolve: ResRecurFuncType):
-    '''extending resolver rule to support lazy'''
+def resolve_lazy(expr: LazyExpr, phase: bool, resolve: ResRecurFuncType, stack: ResStackType, bindings: ResBindingsType):
+    '''extending resolver rule to support lazy, lazy creates its own environmnent'''
+    stack.append(expr)
+    if not phase:  # create local scope only in phase 1
+        bindings[expr] = {}
     resolve(expr.content, phase)
+    stack.pop()
 
 
 def install_resolver_lazy_rules():
@@ -86,7 +101,8 @@ def install_resolver_lazy_rules():
 
 @resolved_eval_rule_decorator
 def lazy_resolved_eval_lazy(expr: LazyExpr, env: Environment):
-    return ThunkVal(expr.content, env)
+    new_env = env_extend(env, [], [])
+    return ThunkVal(expr.content, new_env)
 
 
 def pure_lazy_resolved_eval_sequence(expr_list: List[Expression], env: Environment, evl: EvalRecurFuncType):
@@ -317,24 +333,17 @@ def test_lazy():
       output='a',
       result='2'
     )
-    # lazy refering to itself in local scope will cause resolution error
+    # lazy creates its own environment
     test_one(
       '''
       (define (f)
-        (define a (lazy a))
+        (define a (lazy (+ b 1)))
+        (define b 1)
         a)
       (f)
       ''',
-      panic='resolution error at SYMBOL:a in line 2: local symbol used before initialization'
+      result='2'
     )
-    # lazy refering to itself in global scope will cause "maximum recursion depth exceeded in comparison"
-    # test_one(
-    #   '''
-    #   (define a (lazy a))
-    #   (a)
-    #   ''',
-    #   panic='maximum recursion depth exceeded in comparison'
-    # )
 
 
 def test():
