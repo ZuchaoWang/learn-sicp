@@ -650,7 +650,7 @@ def parse_define(expr: ListExpr):
 
 
 class IfExpr(ListExpr):
-    def __init__(self, expr: ListExpr, pred: Expression, then_branch: Expression, else_branch: Expression):
+    def __init__(self, expr: ListExpr, pred: Expression, then_branch: Expression, else_branch: Optional[Expression]):
         super().__init__(expr.token, expr.expressions)
         self.pred = pred
         self.then_branch = then_branch
@@ -658,12 +658,14 @@ class IfExpr(ListExpr):
 
 
 def parse_if(expr: ListExpr):
-    if len(expr.expressions) != 4:
+    if len(expr.expressions) != 3 and len(expr.expressions) != 4:
         raise SchemeParserError(
-            expr.token, 'if should have 4 expressions, now %d' % len(expr.expressions))
+            expr.token, 'if should have 3 or 4 expressions, now %d' % len(expr.expressions))
     pred_expr = expr.expressions[1]
     then_expr = expr.expressions[2]
-    else_expr = expr.expressions[3]
+    else_expr = None
+    if len(expr.expressions) == 4:
+        else_expr = expr.expressions[3]
     return IfExpr(expr, pred_expr, then_expr, else_expr)
 
 
@@ -1373,8 +1375,10 @@ def eval_if(expr: IfExpr, env: Environment, evl: EvalRecurFuncType):
     pred_val = evl(expr.pred, env)
     if is_truthy(pred_val):
         return evl(expr.then_branch, env)
-    else:
+    elif expr.else_branch is not None:
         return evl(expr.else_branch, env)
+    else:
+        return UndefVal()
 
 
 @eval_rule_decorator
@@ -1661,7 +1665,7 @@ def test_parse():
     # list parsing
     test_one(
         '(if 0 1 2 3)',
-        panic='parser error at LEFT_PAREN in line 1: if should have 4 expressions, now 5'
+        panic='parser error at LEFT_PAREN in line 1: if should have 3 or 4 expressions, now 5'
     )
     # list parsing
     test_one(
@@ -1707,6 +1711,16 @@ def test_eval():
         (factorial 5)
         ''',
         result='120'
+    )
+    # if
+    test_one(
+        '''
+        (define x (if #t 1 2))
+        (if (= x 1) (display "a"))
+        (if (= x 2) (display "b"))
+        ''',
+        output='a',
+        result='#<undef>'
     )
     # iteration
     test_one(

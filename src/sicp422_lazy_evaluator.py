@@ -20,7 +20,7 @@ body result, operator, if-predicate, primitive procedure operands, sequence (exc
 from typing import List, Optional
 from sicp414_evaluator import AndExpr, BeginExpr, BodyExpr, BooleanVal, CallExpr, Environment, EvalRecurFuncType, Expression, \
     IfExpr, ListExpr, NilVal, NotExpr, OrExpr, PrimVal, ProcPlainVal, SchemePanic, SchemeParserError, SchemeRuntimeError, \
-    SchemeVal, env_extend, install_is_equal_rules, install_parser_list_rules, install_quote_rules, install_stringify_expr_rules, \
+    SchemeVal, UndefVal, env_extend, install_is_equal_rules, install_parser_list_rules, install_quote_rules, install_stringify_expr_rules, \
     install_stringify_value_rules, is_truthy, make_global_env, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, \
     scan_source, scheme_flush, stringify_value, update_parser_list_rules
 from sicp416_resolver import ResRecurFuncType, install_resolved_eval_rules, install_resolver_rules, resolve_expr, \
@@ -140,8 +140,10 @@ def lazy_resolved_eval_if(expr: IfExpr, env: Environment, evl: EvalRecurFuncType
     pred_forced = force(pred, evl)  # only change
     if is_truthy(pred_forced):
         return evl(expr.then_branch, env)
-    else:
+    elif expr.else_branch is not None:
         return evl(expr.else_branch, env)
+    else:
+        return UndefVal()
 
 
 @resolved_eval_rule_decorator
@@ -248,6 +250,16 @@ def test_one(source: str, **kargs: str):
 
 
 def test_non_lazy():
+    # if
+    test_one(
+        '''
+        (define x (if #t 1 2))
+        (if (= x 1) (display "a"))
+        (if (= x 2) (display "b"))
+        ''',
+        output='a',
+        result='#<undef>'
+    )
     # single recursion
     test_one(
         '''

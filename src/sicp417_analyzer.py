@@ -207,13 +207,17 @@ def analyze_define_proc(expr: DefineProcExpr, analyze: AnalRecurFuncType):
 def analyze_if(expr: IfExpr, analyze: AnalRecurFuncType):
     pred_evl = analyze(expr.pred)
     then_evl = analyze(expr.then_branch)
-    else_evl = analyze(expr.else_branch)
+    else_evl = None
+    if expr.else_branch is not None:
+        else_evl = analyze(expr.else_branch)
 
     def _evaluate(env: Environment):
         if is_truthy(pred_evl(env)):
             return then_evl(env)
-        else:
+        elif else_evl is not None:
             return else_evl(env)
+        else:
+            return UndefVal()
     return _evaluate
 
 
@@ -368,6 +372,16 @@ def test():
         (f)
         ''',
         result='2'
+    )
+    # if
+    test_one(
+        '''
+        (define x (if #t 1 2))
+        (if (= x 1) (display "a"))
+        (if (= x 2) (display "b"))
+        ''',
+        output='a',
+        result='#<undef>'
     )
     # if, begin and set
     test_one(

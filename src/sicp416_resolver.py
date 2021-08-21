@@ -30,7 +30,7 @@ we do not move definition to front of scope, such as JavaScript's hoisting
 
 
 import inspect
-from typing import Any, Callable, Dict, List, Tuple, Type, Union, cast
+from typing import Any, Callable, Dict, List, Type, Union, cast
 
 # cannot use relative import: from .sicp414_evaluator import blablabla ...
 # but can use absolute import below
@@ -245,7 +245,8 @@ def resolve_define_proc(expr: DefineProcExpr, phase: bool, resolve: ResRecurFunc
 def resolve_if(expr: IfExpr, phase: bool, resolve: ResRecurFuncType):
     resolve(expr.pred, phase)
     resolve(expr.then_branch, phase)
-    resolve(expr.else_branch, phase)
+    if expr.else_branch is not None:
+        resolve(expr.else_branch, phase)
 
 
 @resolver_rule_decorator
