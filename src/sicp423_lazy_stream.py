@@ -66,8 +66,10 @@ def test():
       result='#<undef>'
     )
     # calculateing natural e, see sicp354_diff_equation.py
-    # unfortunately, without tail recursion optimization, max stack depth easily exceeded
+    # unfortunately, lst-ref recursion quickly results in "max stack depth exceeded"
     # that's why we can only use small steps, and cannot get very accurate
+    # this can be solved either via tail call optimization, or iteration without procedure call
+    # but I won't do that
     test_one(shared_lib + \
       '''
       (define (solve f y0 dt)
