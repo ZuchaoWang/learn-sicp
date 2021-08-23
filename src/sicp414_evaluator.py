@@ -379,6 +379,19 @@ def env_extend(env: Environment, parameter: List[str], arguments: List[SchemeVal
 define different types of expressions as difference classes for better type checking
 conplex syntax are just represented as list, e.g. if, define, begin
 see chap 4.1.2
+
+only a few expressions need to store token, to be used to show error location in resolution/runtime error
+SymbolExpr need to store the SYMBOL token, because it needs to check if symbol defined or initialized legally
+CallExpr need to store the LEFT_PAREN token, because it needs to check parameter arity
+
+according to https://craftinginterpreters.com/appendix-ii.html
+DefineVarExpr and DefineProcExpr may store the name SYMBOL token
+DefineProcExpr and LambdaExpr may store parameters SYMBOL token
+but these tokens are not used in our code
+other expressions don't need to store token
+
+we don't store token for every expression, because that prevent us from desugaring
+that's because desugaring may create expression from nowhere, so it's difficult to assign token for them
 '''
 
 
@@ -388,32 +401,37 @@ class SymbolExpr(Expression):
 
 
 class StringExpr(Expression):
-    def __init__(self, token: Token):
-        self.token = token
+    def __init__(self, value: str):
+        self.value = value
 
 
 class NumberExpr(Expression):
-    def __init__(self, token: Token):
-        self.token = token
+    def __init__(self, value: float):
+        self.value = value
 
 
 class BooleanExpr(Expression):
-    def __init__(self, token: Token):
-        self.token = token
+    def __init__(self, value: bool):
+        self.value = value
 
 
 class ListExpr(Expression):
-    def __init__(self, token: Token, expressions: List[Expression]):
-        self.token = token  # left paranthesis
+    def __init__(self, tag: str, expressions: List[Expression]):
+        '''
+        this is the base class for many expressions, it exist to simplify printing
+        it will be printed as (tag *expressions):
+        tag can be sequence, call, if, ...
+        where should exclude the tag
+        '''
+        self.tag = tag
         self.expressions = expressions
 
 
-class BodyExpr(Expression):
-    '''correspond to all code, its member "expressions" are all top level expression'''
+class SequenceExpr(ListExpr):
+    '''can be all top-level code, or a begin expression'''
 
     def __init__(self, expressions: List[Expression]):
-        self.expressions = expressions
-        self.contents = expressions
+        super().__init__("sequence", expressions)
 
 
 class SchemeParserError(Exception):
@@ -423,6 +441,10 @@ class SchemeParserError(Exception):
 
     def __str__(self) -> str:
         return 'parser error at %s in line %d: %s' % (str(self.token), self.token.line+1, self.message)
+
+
+ParserTokenFuncType = Callable[[Token], Expression]
+ParserListFuncType = Callable[[Token, List[Expression]], Expression]
 
 
 class Parser:
@@ -436,8 +458,8 @@ class Parser:
     list -> LEFT_PAREN ( expression )* RIGHT_PAREN;
     '''
 
-    _token_rules: Dict[TokenTag, Callable[[Token], Expression]]
-    _list_rules: Dict[str, Callable[[ListExpr], Expression]]
+    _token_rules: Dict[TokenTag, ParserTokenFuncType]
+    _list_rules: Dict[str, ParserListFuncType]
     _tokens: List[Token]
     _current: int
 
@@ -454,7 +476,7 @@ class Parser:
         self._list_rules = {}
         self._restart([])
 
-    def update_list_rules(self, rules: Dict[str, Callable[[ListExpr], Expression]]):
+    def update_list_rules(self, rules: Dict[str, ParserListFuncType]):
         self._list_rules.update(rules)
 
     def parse(self, tokens: List[Token]):
@@ -466,7 +488,7 @@ class Parser:
                 expr_list.append(expr)
         except SchemeParserError as err:
             scheme_panic(str(err))
-        return BodyExpr(expr_list)
+        return SequenceExpr(expr_list)
 
     def _restart(self, tokens: List[Token]):
         self.tokens = tokens
@@ -480,13 +502,13 @@ class Parser:
         return SymbolExpr(token)
 
     def _parse_string(self, token: Token):
-        return StringExpr(token)
+        return StringExpr(token.literal)
 
     def _parse_number(self, token: Token):
-        return NumberExpr(token)
+        return NumberExpr(token.literal)
 
     def _parse_boolean(self, token: Token):
-        return BooleanExpr(token)
+        return BooleanExpr(token.literal)
 
     def _parse_quote(self, token: Token):
         expr_list: List[Expression] = []
@@ -494,7 +516,7 @@ class Parser:
         if self._is_at_end():
             raise SchemeParserError(token, 'quote cannot be at the end')
         expr_list.append(self._parse_recursive())
-        return self._parse_list(ListExpr(token, expr_list))
+        return self._parse_list(token, expr_list)
 
     def _parse_left_paren(self, token: Token):
         expr_list: List[Expression] = []
@@ -503,19 +525,24 @@ class Parser:
         if self._is_at_end() or self._peek().tag != TokenTag.RIGHT_PAREN:
             raise SchemeParserError(token, 'list missing right parenthesis')
         self._advance()  # consume right parenthesis
-        return self._parse_list(ListExpr(token, expr_list))
+        return self._parse_list(token, expr_list)
 
     def _parse_right_paren(self, token: Token):
         raise SchemeParserError(token, 'unmatched right parenthesis')
 
-    def _parse_list(self, expr: ListExpr):
-        if len(expr.expressions) == 0:
-            return self._list_rules['#nil'](expr)
-        elif type(expr.expressions[0]) == SymbolExpr:
-            symbol_name = cast(SymbolExpr, expr.expressions[0]).token.literal
+    def _parse_list(self, token: Token, expr_list: List[Expression]):
+        '''
+        token is left paranthesis, it used to shown parser error position of all list-like expressions
+        it also show resolution/runtime error position for some list-like expressions
+        expr_list are expressions within the paranthesis pair
+        '''
+        if len(expr_list) == 0:
+            return self._list_rules['#nil'](token, expr_list)
+        elif type(expr_list[0]) == SymbolExpr:
+            symbol_name = cast(SymbolExpr, expr_list[0]).token.literal
             if symbol_name in self._list_rules:
-                return self._list_rules[symbol_name](expr)
-        return self._list_rules['#call'](expr)
+                return self._list_rules[symbol_name](token, expr_list)
+        return self._list_rules['#call'](token, expr_list)
 
     def _is_at_end(self):
         return self.current >= len(self.tokens)
@@ -536,7 +563,7 @@ def parse_tokens(tokens: List[Token]):
     return _parser.parse(tokens)
 
 
-def update_parser_list_rules(rules: Dict[str, Callable[[ListExpr], Expression]]):
+def update_parser_list_rules(rules: Dict[str, ParserListFuncType]):
     _parser.update_list_rules(rules)
 
 
@@ -549,104 +576,103 @@ so no need to parse list at runtime, as in chap 4.1.2
 
 
 class NilExpr(ListExpr):
-    def __init__(self, expr: ListExpr):
-        super().__init__(expr.token, expr.expressions)
+    def __init__(self):
+        super().__init__('nil', [])
 
 
-def parse_nil(expr: ListExpr):
-    return NilExpr(expr)
+def parse_nil(token: Token, expressions: List[Expression]):
+    return NilExpr()
 
 
 class CallExpr(ListExpr):
-    def __init__(self, expr: ListExpr, operator: Expression, operands: List[Expression]):
-        super().__init__(expr.token, expr.expressions)
+    def __init__(self, token: Token, operator: Expression, operands: List[Expression]):
+        super().__init__('call', [operator, *operands])
         self.operator = operator
         self.operands = operands
 
 
-def parse_call(expr: ListExpr):
-    if len(expr.expressions) == 0:
-        raise SchemeParserError(expr.token, 'call should not be empty')
-    operator_expr = expr.expressions[0]
-    operand_exprs = expr.expressions[1:]
-    return CallExpr(expr, operator_expr, operand_exprs)
+def parse_call(token: Token, expressions: List[Expression]):
+    if len(expressions) == 0:
+        raise SchemeParserError(token, 'call should not be empty')
+    operator_expr = expressions[0]
+    operand_exprs = expressions[1:]
+    return CallExpr(token, operator_expr, operand_exprs)
 
 
 class QuoteExpr(ListExpr):
-    def __init__(self, expr: ListExpr, content: Expression):
-        super().__init__(expr.token, expr.expressions)
+    def __init__(self, content: Expression):
+        super().__init__('quote', [content])
         self.content = content
 
 
-def parse_quote(expr: ListExpr):
-    if len(expr.expressions) != 2:
-        raise SchemeParserError(
-            expr.token, 'quote should have 2 expressions, now %d' % len(expr.expressions))
-    return QuoteExpr(expr, expr.expressions[1])
+def parse_quote(token: Token, expressions: List[Expression]):
+    if len(expressions) != 2:
+        raise SchemeParserError(token, 'quote should have 2 expressions, now %d' % len(expressions))
+    return QuoteExpr(expressions[1])
 
 
 class SetExpr(ListExpr):
-    def __init__(self, expr: ListExpr, name: SymbolExpr, initializer: Expression):
-        super().__init__(expr.token, expr.expressions)
+    def __init__(self, name: SymbolExpr, initializer: Expression):
+        super().__init__('set', [name, initializer])
         self.name = name
         self.initializer = initializer
 
 
-def parse_set(expr: ListExpr):
-    if len(expr.expressions) != 3:
+def parse_set(token: Token, expressions: List[Expression]):
+    if len(expressions) != 3:
         raise SchemeParserError(
-            expr.token, 'set should have 3 expressions, now %d' % len(expr.expressions))
-    name_expr = cast(SymbolExpr, expr.expressions[1])
-    initializer_expr = expr.expressions[2]
-    return SetExpr(expr, name_expr, initializer_expr)
+            token, 'set should have 3 expressions, now %d' % len(expressions))
+    name_expr = cast(SymbolExpr, expressions[1])
+    initializer_expr = expressions[2]
+    return SetExpr(name_expr, initializer_expr)
 
 
 class DefineVarExpr(ListExpr):
-    def __init__(self, expr: ListExpr, name: SymbolExpr, initializer: Expression):
-        super().__init__(expr.token, expr.expressions)
+    def __init__(self, name: SymbolExpr, initializer: Expression):
+        super().__init__('define-var', [name, initializer])
         self.name = name
         self.initializer = initializer
 
 
 class DefineProcExpr(ListExpr):
-    def __init__(self, expr: ListExpr, name: SymbolExpr, parameters: List[SymbolExpr], body: List[Expression]):
-        super().__init__(expr.token, expr.expressions)
+    def __init__(self, name: SymbolExpr, parameters: List[SymbolExpr], body: SequenceExpr):
+        super().__init__('define-proc', [name, *parameters, body])
         self.name = name
         self.parameters = parameters
         self.body = body
 
 
-def parse_define(expr: ListExpr):
-    if len(expr.expressions) < 3:
+def parse_define(token: Token, expressions: List[Expression]):
+    if len(expressions) < 3:
         raise SchemeParserError(
-            expr.token, 'define should have at least 3 expressions, now %d' % len(expr.expressions))
-    expr1 = expr.expressions[1]
+            token, 'define should have at least 3 expressions, now %d' % len(expressions))
+    expr1 = expressions[1]
     if isinstance(expr1, SymbolExpr):  # define variable
         name_expr = expr1
-        if len(expr.expressions) != 3:
+        if len(expressions) != 3:
             raise SchemeParserError(
-                expr.token, 'define variable should have 3 expressions, now %d' % len(expr.expressions))
-        return DefineVarExpr(expr, name_expr, expr.expressions[2])
+                token, 'define variable should have 3 expressions, now %d' % len(expressions))
+        return DefineVarExpr(name_expr, expressions[2])
     elif isinstance(expr1, ListExpr):  # define procedure
         if len(expr1.expressions) == 0:
             raise SchemeParserError(
-                expr.token, 'define procedure should provide name')
+                token, 'define procedure should provide name')
         expr10 = expr1.expressions[0]
         if isinstance(expr10, SymbolExpr):
             name_expr = expr10
             para_exprs = expr1.expressions[1:]
-            body_exprs = expr.expressions[2:]
+            body_exprs = SequenceExpr(expressions[2:])
             if all([isinstance(p, SymbolExpr) for p in para_exprs]):
-                return DefineProcExpr(expr, name_expr, cast(List[SymbolExpr], para_exprs), body_exprs)
+                return DefineProcExpr(name_expr, cast(List[SymbolExpr], para_exprs), body_exprs)
             else:
                 raise SchemeParserError(
-                    expr.token, 'define procedure should use symbolic parameters')
+                    token, 'define procedure should use symbolic parameters')
         else:
             raise SchemeParserError(
-                expr.token, 'define procedure should use symbolic name, now %s' % type(expr10).__name__)
+                token, 'define procedure should use symbolic name, now %s' % type(expr10).__name__)
     else:
         raise SchemeParserError(
-            expr.token, 'define 2nd expression should be symbol or list, now %s' % type(expr1).__name__)
+            token, 'define 2nd expression should be symbol or list, now %s' % type(expr1).__name__)
 
 
 class IfExpr(ListExpr):
