@@ -31,7 +31,7 @@ we will not do that
 from typing import List, Optional
 from sicp414_evaluator import AndExpr, BeginExpr, BodyExpr, BooleanVal, CallExpr, Environment, EvalRecurFuncType, Expression, \
     IfExpr, ListExpr, NilVal, NotExpr, OrExpr, PrimVal, ProcPlainVal, SchemePanic, SchemeParserError, SchemeRuntimeError, \
-    SchemeVal, UndefVal, env_extend, install_is_equal_rules, install_parser_list_rules, install_quote_rules, install_stringify_expr_rules, \
+    SchemeVal, UndefVal, env_extend, install_is_equal_rules, install_parser_rules, install_quote_rules, install_stringify_expr_rules, \
     install_stringify_value_rules, is_truthy, make_global_env, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, \
     scan_source, scheme_flush, stringify_value, update_parser_list_rules
 from sicp416_resolver import ResBindingsType, ResRecurFuncType, ResStackType, install_resolved_eval_rules, install_resolver_rules, resolve_expr, \
@@ -41,7 +41,7 @@ from sicp416_resolver import ResBindingsType, ResRecurFuncType, ResStackType, in
 
 class LazyExpr(ListExpr):
     def __init__(self, expr: ListExpr, content: Expression):
-        super().__init__(expr.token, expr.expressions)
+        super().__init__(expr.paren, expr.expressions)
         self.content = content
 
 
@@ -49,7 +49,7 @@ def parse_lazy(expr: ListExpr):
     '''parse lazy from list expression'''
     if len(expr.expressions) != 2:
         raise SchemeParserError(
-            expr.token, 'lazy should have 2 expressions, now %d' % len(expr.expressions))
+            expr.paren, 'lazy should have 2 expressions, now %d' % len(expr.expressions))
     return LazyExpr(expr, expr.expressions[1])
 
 
@@ -208,7 +208,7 @@ def install_resolved_eval_lazy_rules():
 
 
 def install_rules():
-    install_parser_list_rules()
+    install_parser_rules()
     install_stringify_expr_rules()
     install_stringify_value_rules()
     install_is_equal_rules()

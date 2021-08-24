@@ -16,7 +16,7 @@ from sicp414_evaluator import AndExpr, BeginExpr, BodyExpr, BooleanExpr, Boolean
     Environment, Expression, GenericExpr, IfExpr, LambdaExpr, ListExpr, NilExpr, NilVal, NotExpr, NumberExpr, NumberVal, OrExpr, \
     PrimVal, ProcVal, QuoteExpr, SchemePanic, SchemeRuntimeError, SchemeVal, SetExpr, SymbolVal, UndefVal, \
     StringExpr, StringVal, SymbolExpr, Token, env_define, env_extend, find_type, \
-    install_is_equal_rules, install_parser_list_rules, install_quote_rules, \
+    install_is_equal_rules, install_parser_rules, install_quote_rules, \
     install_stringify_expr_rules, install_stringify_value_rules, is_truthy, \
     make_global_env, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_define_var, \
     quote_expr, scan_source, scheme_flush, scheme_panic, stringify_value
@@ -144,7 +144,7 @@ class ProcAnalyzedVal(ProcVal):
 
 def pure_eval_call_proc_analyzed(expr: ListExpr, operator: ProcAnalyzedVal, operands: List[SchemeVal]):
     if len(operator.parameters) != len(operands):
-        raise SchemeRuntimeError(expr.token, '%s expect %d arguments, get %d' % (
+        raise SchemeRuntimeError(expr.paren, '%s expect %d arguments, get %d' % (
             operator.name, len(operator.parameters), len(operands)))
     new_env = env_extend(operator.env, operator.parameters, operands)
     return operator.body(new_env)
@@ -291,7 +291,7 @@ def install_analyzer_rules():
 
 
 def install_rules():
-    install_parser_list_rules()
+    install_parser_rules()
     install_stringify_expr_rules()
     install_stringify_value_rules()
     install_is_equal_rules()

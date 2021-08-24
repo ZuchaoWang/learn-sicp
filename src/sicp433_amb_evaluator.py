@@ -5,7 +5,7 @@ from sicp416_resolver import ResBindingsType, ResRecurFuncType, ResStackType, pu
 
 class AmbExpr(ListExpr):
     def __init__(self, expr: ListExpr, contents: List[Expression]):
-        super().__init__(expr.token, expr.expressions)
+        super().__init__(expr.paren, expr.expressions)
         self.contents = contents
 
 
@@ -16,7 +16,7 @@ def parse_amb(expr: ListExpr):
 
 class RequireExpr(ListExpr):
     def __init__(self, expr: ListExpr, pred: Expression):
-        super().__init__(expr.token, expr.expressions)
+        super().__init__(expr.paren, expr.expressions)
         self.pred = pred
 
 
@@ -36,7 +36,7 @@ def parse_require(expr: ListExpr):
     '''
     if len(expr.expressions) != 2:
         raise SchemeParserError(
-            expr.token, 'require should have 2 expressions, now %d' % len(expr.expressions))
+            expr.paren, 'require should have 2 expressions, now %d' % len(expr.expressions))
     return RequireExpr(expr, expr.expressions[1])
 
 

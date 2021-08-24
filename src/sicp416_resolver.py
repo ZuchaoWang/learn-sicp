@@ -35,12 +35,12 @@ from typing import Any, Callable, Dict, List, Type, Union, cast
 # cannot use relative import: from .sicp414_evaluator import blablabla ...
 # but can use absolute import below
 
-from sicp414_evaluator import AndExpr, BeginExpr, BodyExpr, BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, \
+from sicp414_evaluator import AndExpr, SequenceExpr, BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, \
     EvalRecurFuncType, Expression, GenericExpr, IfExpr, LambdaExpr, ListExpr, NilExpr, NotExpr, NumberExpr, OrExpr, QuoteExpr, \
     SchemeEnvError, SchemePanic, SchemeRuntimeError, SchemeVal, SetExpr, StringExpr, SymbolExpr, Token, \
     eval_and, eval_boolean, eval_call, eval_contents, eval_define_proc, eval_define_var, eval_if, \
     eval_lambda, eval_nil, eval_not, eval_number, eval_or, eval_quote, eval_string, \
-    find_type, install_is_equal_rules, install_parser_list_rules, install_quote_rules, install_stringify_expr_rules, \
+    find_type, install_is_equal_rules, install_parser_rules, install_quote_rules, install_stringify_expr_rules, \
     install_stringify_value_rules, make_global_env, parse_tokens, scan_source, scheme_flush, scheme_panic, stringify_value
 
 
@@ -68,7 +68,7 @@ def update_resolver_rules(rules: Dict[Type, ResFuncType]):
     _resolver_rules.update(rules)
 
 
-def resolve_expr(expr: BodyExpr):
+def resolve_expr(expr: SequenceExpr):
     '''
     resolution need to traverse the scopes
     we notice each scope is associated with an expression, so we store expressions in the _expr_stack
@@ -178,7 +178,7 @@ def pure_resolve_sequence(expr_list: List[Expression], phase: bool, resolve: Res
 
 
 @resolver_rule_decorator
-def resolve_contents(expr: Union[BodyExpr, BeginExpr, AndExpr, OrExpr], phase: bool, resolve: ResRecurFuncType):
+def resolve_contents(expr: Union[SequenceExpr, AndExpr, OrExpr], phase: bool, resolve: ResRecurFuncType):
     pure_resolve_sequence(expr.contents, phase, resolve)
 
 
@@ -434,7 +434,7 @@ def install_resolved_eval_rules():
 
 
 def install_rules():
-    install_parser_list_rules()
+    install_parser_rules()
     install_stringify_expr_rules()
     install_stringify_value_rules()
     install_is_equal_rules()
