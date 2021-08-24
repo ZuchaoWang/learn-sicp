@@ -12,9 +12,9 @@ so I do not recommend this step
 import inspect
 from typing import Any, Callable, Dict, List, Type, Union
 
-from sicp414_evaluator import AndExpr, BeginExpr, BodyExpr, BooleanExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, \
-    Environment, Expression, GenericExpr, IfExpr, LambdaExpr, ListExpr, NilExpr, NilVal, NotExpr, NumberExpr, NumberVal, OrExpr, \
-    PrimVal, ProcVal, QuoteExpr, SchemePanic, SchemeRuntimeError, SchemeVal, SetExpr, SymbolVal, UndefVal, \
+from sicp414_evaluator import AndExpr, SequenceExpr, BooleanExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, \
+    Environment, Expression, GenericExpr, IfExpr, LambdaExpr, NilExpr, NilVal, NotExpr, NumberExpr, NumberVal, OrExpr, \
+    PrimVal, ProcVal, QuoteExpr, SchemePanic, SchemeRuntimeError, SchemeVal, SequenceExpr, SetExpr, SymbolVal, UndefVal, \
     StringExpr, StringVal, SymbolExpr, Token, env_define, env_extend, find_type, \
     install_is_equal_rules, install_parser_rules, install_quote_rules, \
     install_stringify_expr_rules, install_stringify_value_rules, is_truthy, \
@@ -44,7 +44,7 @@ def update_analyzer_rules(rules: Dict[Type, AnalFuncType]):
     _analyzer_rules.update(rules)
 
 
-def analyze_expr(expr: BodyExpr, distances: ResDistancesType):
+def analyze_expr(expr: SequenceExpr, distances: ResDistancesType):
     def analyze_recursive(expr: Expression):
         t = find_type(type(expr), _analyzer_rules)
         f = _analyzer_rules[t]
@@ -92,17 +92,17 @@ def analyze_symbol(expr: SymbolExpr, analyze: AnalRecurFuncType, distances: ResD
 
 @analyzer_rule_decorator
 def analyze_string(expr: StringExpr):
-    return lambda env: StringVal(expr.token.literal)
+    return lambda env: StringVal(expr.value.literal)
 
 
 @analyzer_rule_decorator
 def analyze_number(expr: NumberExpr):
-    return lambda env: NumberVal(expr.token.literal)
+    return lambda env: NumberVal(expr.value.literal)
 
 
 @analyzer_rule_decorator
 def analyze_boolean(expr: BooleanExpr):
-    return lambda env: BooleanVal(expr.token.literal)
+    return lambda env: BooleanVal(expr.value.literal)
 
 
 @analyzer_rule_decorator
@@ -110,10 +110,11 @@ def analyze_nil():
     return lambda env: NilVal()
 
 
-def pure_analyze_sequence(expr_list: List[Expression], analyze: AnalRecurFuncType):
+@analyzer_rule_decorator
+def analyze_sequence(expr: SequenceExpr, analyze: AnalRecurFuncType):
     evls: List[EvaluableType] = []
-    for expr in expr_list:
-        evl = analyze(expr)
+    for subexpr in expr.contents:
+        evl = analyze(subexpr)
         evls.append(evl)
 
     def _evaluate(env: Environment):
@@ -122,11 +123,6 @@ def pure_analyze_sequence(expr_list: List[Expression], analyze: AnalRecurFuncTyp
             res = evl(env)
         return res
     return _evaluate
-
-
-@analyzer_rule_decorator
-def analyze_contents(expr: Union[BodyExpr, BeginExpr], analyze: AnalRecurFuncType):
-    return pure_analyze_sequence(expr.contents, analyze)
 
 
 @analyzer_rule_decorator
@@ -142,7 +138,7 @@ class ProcAnalyzedVal(ProcVal):
         self.body = body
 
 
-def pure_eval_call_proc_analyzed(expr: ListExpr, operator: ProcAnalyzedVal, operands: List[SchemeVal]):
+def pure_eval_call_proc_analyzed(expr: CallExpr, operator: ProcAnalyzedVal, operands: List[SchemeVal]):
     if len(operator.parameters) != len(operands):
         raise SchemeRuntimeError(expr.paren, '%s expect %d arguments, get %d' % (
             operator.name, len(operator.parameters), len(operands)))
@@ -173,19 +169,18 @@ def analyze_set(expr: SetExpr, analyze: AnalRecurFuncType, distances: ResDistanc
 
     def _evaluate(env: Environment):
         initializer = initializer_evl(env)
-        return pure_resolved_eval_set(expr.name, initializer, env, distances)
+        return pure_resolved_eval_set(expr, initializer, env, distances)
     return _evaluate
 
 
-def pure_eval_define_proc_analyzed(name_expr: SymbolExpr, para_exprs: List[SymbolExpr], body_exprs_evl: EvaluableType, env: Environment):
-    proc_obj = ProcAnalyzedVal(name_expr.token.literal, [
-        p.token.literal for p in para_exprs], body_exprs_evl, env)
-    env_define(env, name_expr.token.literal, proc_obj)
-    return SymbolVal(name_expr.token.literal)
+def pure_eval_define_proc_analyzed(name: Token, parameters: List[Token], body_evl: EvaluableType, env: Environment):
+    proc_obj = ProcAnalyzedVal(name.literal, [p.literal for p in parameters], body_evl, env)
+    env_define(env, name.literal, proc_obj)
+    return SymbolVal(name.literal)
 
 
 @analyzer_rule_decorator
-def analyze_define_var(expr: DefineVarExpr, analyze: AnalRecurFuncType, distances: ResDistancesType):
+def analyze_define_var(expr: DefineVarExpr, analyze: AnalRecurFuncType):
     initializer_evl = analyze(expr.initializer)
 
     def _evaluate(env: Environment):
@@ -196,7 +191,7 @@ def analyze_define_var(expr: DefineVarExpr, analyze: AnalRecurFuncType, distance
 
 @analyzer_rule_decorator
 def analyze_define_proc(expr: DefineProcExpr, analyze: AnalRecurFuncType):
-    body_evl = pure_analyze_sequence(expr.body, analyze)
+    body_evl = analyze(expr.body)
 
     def _evaluate(env: Environment):
         return pure_eval_define_proc_analyzed(expr.name, expr.parameters, body_evl, env)
@@ -223,11 +218,10 @@ def analyze_if(expr: IfExpr, analyze: AnalRecurFuncType):
 
 @analyzer_rule_decorator
 def analyze_lambda(expr: LambdaExpr, analyze: AnalRecurFuncType):
-    body_evl = pure_analyze_sequence(expr.body, analyze)
+    body_evl = analyze(expr.body)
 
     def _evaluate(env: Environment):
-        return ProcAnalyzedVal('lambda', [
-            p.token.literal for p in expr.parameters], body_evl, env)
+        return ProcAnalyzedVal('lambda', [p.literal for p in expr.parameters], body_evl, env)
     return _evaluate
 
 
@@ -269,7 +263,7 @@ def analyze_not(expr: NotExpr, analyze: AnalRecurFuncType):
 
 def install_analyzer_rules():
     rules = {
-        BodyExpr: analyze_contents,
+        SequenceExpr: analyze_sequence,
         SymbolExpr: analyze_symbol,
         StringExpr: analyze_string,
         NumberExpr: analyze_number,
@@ -281,7 +275,6 @@ def install_analyzer_rules():
         DefineVarExpr: analyze_define_var,
         DefineProcExpr: analyze_define_proc,
         IfExpr: analyze_if,
-        BeginExpr: analyze_contents,
         LambdaExpr: analyze_lambda,
         AndExpr: analyze_and,
         OrExpr: analyze_or,

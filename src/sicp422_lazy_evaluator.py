@@ -29,19 +29,19 @@ we will not do that
 '''
 
 from typing import List, Optional
-from sicp414_evaluator import AndExpr, BeginExpr, BodyExpr, BooleanVal, CallExpr, Environment, EvalRecurFuncType, Expression, \
+from sicp414_evaluator import AndExpr, SequenceExpr, BooleanVal, CallExpr, Environment, EvalRecurFuncType, Expression, \
     IfExpr, ListExpr, NilVal, NotExpr, OrExpr, PrimVal, ProcPlainVal, SchemePanic, SchemeParserError, SchemeRuntimeError, \
-    SchemeVal, UndefVal, env_extend, install_is_equal_rules, install_parser_rules, install_quote_rules, install_stringify_expr_rules, \
-    install_stringify_value_rules, is_truthy, make_global_env, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, \
-    scan_source, scheme_flush, stringify_value, update_parser_list_rules
+    SchemeVal, SequenceExpr, Token, TokenTag, UndefVal, env_extend, install_is_equal_rules, install_parser_rules, install_quote_rules, install_stringify_expr_rules, \
+    install_stringify_value_rules, is_truthy, make_global_env, parse_list_recursive, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, \
+    scan_source, scheme_flush, stringify_expr, stringify_expr_rule_decorator, stringify_value, update_parser_rules, update_stringify_expr_rules
 from sicp416_resolver import ResBindingsType, ResRecurFuncType, ResStackType, install_resolved_eval_rules, install_resolver_rules, resolve_expr, \
     resolved_eval_rule_decorator, resolved_eval_rule_decorator, resolved_evaluate_expr, resolver_rule_decorator, \
     update_resolved_eval_rules, update_resolver_rules
 
 
-class LazyExpr(ListExpr):
-    def __init__(self, expr: ListExpr, content: Expression):
-        super().__init__(expr.paren, expr.expressions)
+class LazyExpr(Expression):
+    def __init__(self, paren: Token, content: Expression):
+        self.paren = paren
         self.content = content
 
 
@@ -50,12 +50,24 @@ def parse_lazy(expr: ListExpr):
     if len(expr.expressions) != 2:
         raise SchemeParserError(
             expr.paren, 'lazy should have 2 expressions, now %d' % len(expr.expressions))
-    return LazyExpr(expr, expr.expressions[1])
+    content = parse_list_recursive(expr.expressions[1])
+    return LazyExpr(expr.paren, content)
 
 
-def install_parser_lazy_list_rules():
+def install_parser_lazy_rules():
     rules = {'lazy': parse_lazy}
-    update_parser_list_rules(rules)
+    update_parser_rules(rules)
+
+
+@stringify_expr_rule_decorator
+def stringify_expr_lazy(expr: LazyExpr):
+    substrs = ['lazy', stringify_expr(expr.content)]
+    return '(%s)' % (' '.join(substrs))
+
+
+def install_stringify_lazy_expr_rules():
+    rules = {'lazy': stringify_expr_lazy}
+    update_stringify_expr_rules(rules)
 
 
 class ThunkVal(SchemeVal):
@@ -105,23 +117,25 @@ def lazy_resolved_eval_lazy(expr: LazyExpr, env: Environment):
     return ThunkVal(expr.content, new_env)
 
 
-def pure_lazy_resolved_eval_sequence(expr_list: List[Expression], env: Environment, evl: EvalRecurFuncType):
+@resolved_eval_rule_decorator
+def lazy_resolved_eval_sequence(expr: SequenceExpr, env: Environment, evl: EvalRecurFuncType):
+    '''notice begin and root have different behavior, regarding to whether the last subexpr should be forced'''
     res: SchemeVal = NilVal()
-    for i in range(len(expr_list)):
-        res = evl(expr_list[i], env)
-        # force it if not last
-        if i != len(expr_list) - 1:
+    for i in range(len(expr.contents)):
+        res = evl(expr.contents[i], env)
+        # force it if not last, or is root
+        if i != len(expr.contents) - 1 or expr.keyword.tag == TokenTag.ROOT:
             res = force(res, evl)
     return res
 
 
 def pure_lazy_resolved_eval_call_proc_plain(expr: CallExpr, operator: ProcPlainVal, operands: List[SchemeVal], evl: EvalRecurFuncType):
     if len(operator.parameters) != len(operands):
-        raise SchemeRuntimeError(expr.token, '%s expect %d arguments, get %d' % (
+        raise SchemeRuntimeError(expr.paren, '%s expect %d arguments, get %d' % (
             operator.name, len(operator.parameters), len(operands)))
     new_env = env_extend(operator.env, operator.parameters, operands)
     # only change
-    return pure_lazy_resolved_eval_sequence(operator.body, new_env, evl)
+    return evl(operator.body, new_env)
 
 
 @resolved_eval_rule_decorator
@@ -136,18 +150,6 @@ def lazy_resolved_eval_call(expr: CallExpr, env: Environment, evl: EvalRecurFunc
         return pure_lazy_resolved_eval_call_proc_plain(expr, operator_forced, operands, evl)
     else:
         return pure_eval_call_invalid(expr, operator_forced)
-
-
-@resolved_eval_rule_decorator
-def lazy_resolved_eval_body(expr: BodyExpr, env: Environment, evl: EvalRecurFuncType):
-    res = pure_lazy_resolved_eval_sequence(expr.contents, env, evl)
-    res = force(res, evl)  # force it before presenting it to user
-    return res
-
-
-@resolved_eval_rule_decorator
-def lazy_resolved_eval_begin(expr: BeginExpr, env: Environment, evl: EvalRecurFuncType):
-    return pure_lazy_resolved_eval_sequence(expr.contents, env, evl)
 
 
 @resolved_eval_rule_decorator
@@ -196,8 +198,7 @@ def install_resolved_eval_lazy_rules():
     '''
     rules = {
         LazyExpr: lazy_resolved_eval_lazy,
-        BodyExpr: lazy_resolved_eval_body,
-        BeginExpr: lazy_resolved_eval_begin,
+        SequenceExpr: lazy_resolved_eval_sequence,
         CallExpr: lazy_resolved_eval_call,
         IfExpr: lazy_resolved_eval_if,
         AndExpr: lazy_resolved_eval_and,
@@ -215,7 +216,8 @@ def install_rules():
     install_quote_rules()
     install_resolver_rules()
     install_resolved_eval_rules()
-    install_parser_lazy_list_rules()
+    install_parser_lazy_rules()
+    install_stringify_lazy_expr_rules()
     install_resolver_lazy_rules()
     install_resolved_eval_lazy_rules()
 
@@ -300,49 +302,49 @@ def test_non_lazy():
 def test_lazy():
     # double lazy result
     test_one(
-      '''
+        '''
       (lazy (lazy (+ 1 2)))
       ''',
-      result='3'
+        result='3'
     )
     # skip lazy invalid
     test_one(
-      '''
+        '''
       (define (f pd th el)
         (if pd th el))
       (f #t 1 (lazy (/ 0 0)))
       ''',
-      result='1'
+        result='1'
     )
     # sequence will be forced, except last
     test_one(
-      '''
+        '''
       (lazy (display "a"))
       (lazy (display "b"))
       (lazy (display "c"))
       ''',
-      output='abc',
-      result='#<undef>'
+        output='abc',
+        result='#<undef>'
     )
     # memoization
     test_one(
-      '''
+        '''
       (define (f x) (+ x x))
       (f (lazy (begin (display "a") 1)))
       ''',
-      output='a',
-      result='2'
+        output='a',
+        result='2'
     )
     # lazy creates its own environment
     test_one(
-      '''
+        '''
       (define (f)
         (define a (lazy (+ b 1)))
         (define b 1)
         a)
       (f)
       ''',
-      result='2'
+        result='2'
     )
 
 

@@ -406,23 +406,23 @@ ref: https://craftinginterpreters.com/appendix-ii.html
 
 
 class SymbolExpr(Expression):
-    def __init__(self, token: Token):
-        self.token = token
+    def __init__(self, name: Token):
+        self.name = name
 
 
 class StringExpr(Expression):
-    def __init__(self, token: Token):
-        self.token = token
+    def __init__(self, value: Token):
+        self.value = value
 
 
 class NumberExpr(Expression):
-    def __init__(self, token: Token):
-        self.token = token
+    def __init__(self, value: Token):
+        self.value = value
 
 
 class BooleanExpr(Expression):
-    def __init__(self, token: Token):
-        self.token = token
+    def __init__(self, value: Token):
+        self.value = value
 
 
 class ListExpr(Expression):
@@ -590,7 +590,7 @@ def parse_list_recursive(expr: Expression) -> Expression:
         if len(expr.expressions) == 0:
             return _list_parser_rules['#nil'](expr)
         elif type(expr.expressions[0]) == SymbolExpr:
-            symbol_name = cast(SymbolExpr, expr.expressions[0]).token.literal
+            symbol_name = cast(SymbolExpr, expr.expressions[0]).name.literal
             if symbol_name in _list_parser_rules:
                 return _list_parser_rules[symbol_name](expr)
         return _list_parser_rules['#call'](expr)
@@ -648,7 +648,7 @@ def parse_call(expr: ListExpr):
 def parse_quote(expr: ListExpr):
     if len(expr.expressions) != 2:
         raise SchemeParserError(expr.paren, 'quote should have 2 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).token
+    keyword = cast(SymbolExpr, expr.expressions[0]).name
     # should not recursively parse expressions under QuoteExpr
     return QuoteExpr(keyword, expr.expressions[1])
 
@@ -664,8 +664,8 @@ def parse_set(expr: ListExpr):
     if len(expr.expressions) != 3:
         raise SchemeParserError(
             expr.paren, 'set should have 3 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).token
-    name = cast(SymbolExpr, expr.expressions[1]).token
+    keyword = cast(SymbolExpr, expr.expressions[0]).name
+    name = cast(SymbolExpr, expr.expressions[1]).name
     initializer = parse_list_recursive(expr.expressions[2])
     return SetExpr(keyword, name, initializer)
 
@@ -677,7 +677,7 @@ class DefineVarExpr(Expression):
         self.initializer = initializer
 
 
-class DefineProcExpr(ListExpr):
+class DefineProcExpr(Expression):
     def __init__(self, keyword: Token, name: Token, parameters: List[Token], body: SequenceExpr):
         self.keyword = keyword
         self.name = name
@@ -689,10 +689,10 @@ def parse_define(expr: ListExpr):
     if len(expr.expressions) < 3:
         raise SchemeParserError(
             expr.paren, 'define should have at least 3 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).token
+    keyword = cast(SymbolExpr, expr.expressions[0]).name
     expr1 = expr.expressions[1]
     if isinstance(expr1, SymbolExpr):  # define variable
-        name = cast(SymbolExpr, expr1).token
+        name = cast(SymbolExpr, expr1).name
         if len(expr.expressions) != 3:
             raise SchemeParserError(
                 expr.paren, 'define variable should have 3 expressions, now %d' % len(expr.expressions))
@@ -704,10 +704,10 @@ def parse_define(expr: ListExpr):
                 expr.paren, 'define procedure should provide name')
         expr10 = expr1.expressions[0]
         if isinstance(expr10, SymbolExpr):
-            name = cast(SymbolExpr, expr10).token
+            name = cast(SymbolExpr, expr10).name
             para_exprs = expr1.expressions[1:]
             if all([isinstance(subexpr, SymbolExpr) for subexpr in para_exprs]):
-                parameters = [cast(SymbolExpr, subexpr).token for subexpr in para_exprs]
+                parameters = [cast(SymbolExpr, subexpr).name for subexpr in para_exprs]
                 body = SequenceExpr(expr.paren, [parse_list_recursive(subexpr) for subexpr in expr.expressions[2:]])
                 return DefineProcExpr(keyword, name, parameters, body)
             else:
@@ -721,7 +721,7 @@ def parse_define(expr: ListExpr):
             expr.paren, 'define 2nd expression should be symbol or list, now %s' % type(expr1).__name__)
 
 
-class IfExpr(ListExpr):
+class IfExpr(Expression):
     def __init__(self, keyword: Token, pred: Expression, then_branch: Expression, else_branch: Optional[Expression]):
         self.keyword = keyword
         self.pred = pred
@@ -733,7 +733,7 @@ def parse_if(expr: ListExpr):
     if len(expr.expressions) != 3 and len(expr.expressions) != 4:
         raise SchemeParserError(
             expr.paren, 'if should have 3 or 4 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).token
+    keyword = cast(SymbolExpr, expr.expressions[0]).name
     pred_expr = parse_list_recursive(expr.expressions[1])
     then_expr = parse_list_recursive(expr.expressions[2])
     else_expr = None
@@ -746,12 +746,12 @@ def parse_begin(expr: ListExpr):
     if len(expr.expressions) < 2:
         raise SchemeParserError(
             expr.paren, 'begin should have at least 2 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).token
+    keyword = cast(SymbolExpr, expr.expressions[0]).name
     contents = [parse_list_recursive(subexpr) for subexpr in expr.expressions[1:]]
     return SequenceExpr(keyword, contents)
 
 
-class LambdaExpr(ListExpr):
+class LambdaExpr(Expression):
     def __init__(self, keyword: Token, parameters: List[Token], body: SequenceExpr):
         self.keyword = keyword
         self.parameters = parameters
@@ -762,12 +762,12 @@ def parse_lambda(expr: ListExpr):
     if len(expr.expressions) < 3:
         raise SchemeParserError(
             expr.paren, 'lambda should have at least 3 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).token
+    keyword = cast(SymbolExpr, expr.expressions[0]).name
     expr1 = expr.expressions[1]
     if isinstance(expr1, ListExpr):
         para_exprs = expr1.expressions
         if all([isinstance(subexpr, SymbolExpr) for subexpr in para_exprs]):
-            parameters = [cast(SymbolExpr, subexpr).token for subexpr in para_exprs]
+            parameters = [cast(SymbolExpr, subexpr).name for subexpr in para_exprs]
             body = SequenceExpr(expr.paren, [parse_list_recursive(subexpr) for subexpr in expr.expressions[2:]])
             return LambdaExpr(keyword, parameters, body)
         else:
@@ -778,7 +778,7 @@ def parse_lambda(expr: ListExpr):
             expr.paren, 'lambda 2nd expression should be list, now %s' % type(expr1).__name__)
 
 
-class AndExpr(ListExpr):
+class AndExpr(Expression):
     def __init__(self, keyword: Token, contents: List[Expression]):
         self.keyword = keyword
         self.contents = contents
@@ -788,12 +788,12 @@ def parse_and(expr: ListExpr):
     if len(expr.expressions) < 3:
         raise SchemeParserError(
             expr.paren, 'and should have at least 3 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).token
+    keyword = cast(SymbolExpr, expr.expressions[0]).name
     contents = [parse_list_recursive(subexpr) for subexpr in expr.expressions[1:]]
     return AndExpr(keyword, contents)
 
 
-class OrExpr(ListExpr):
+class OrExpr(Expression):
     def __init__(self, keyword: Token, contents: List[Expression]):
         self.keyword = keyword
         self.contents = contents
@@ -803,12 +803,12 @@ def parse_or(expr: ListExpr):
     if len(expr.expressions) < 3:
         raise SchemeParserError(
             expr.paren, 'or should have at least 3 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).token
+    keyword = cast(SymbolExpr, expr.expressions[0]).name
     contents = [parse_list_recursive(subexpr) for subexpr in expr.expressions[1:]]
     return OrExpr(keyword, contents)
 
 
-class NotExpr(ListExpr):
+class NotExpr(Expression):
     def __init__(self, keyword: Token, content: Expression):
         self.keyword = keyword
         self.content = content
@@ -818,7 +818,7 @@ def parse_not(expr: ListExpr):
     if len(expr.expressions) != 2:
         raise SchemeParserError(
             expr.paren, 'not should have 2 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).token
+    keyword = cast(SymbolExpr, expr.expressions[0]).name
     content = parse_list_recursive(expr.expressions[1])
     return NotExpr(keyword, content)
 
@@ -879,22 +879,22 @@ def stringify_expr_rule_decorator(rule_func: StringifyExprRuleType):
 
 @stringify_expr_rule_decorator
 def stringify_expr_symbol(expr: SymbolExpr):
-    return expr.token.literal
+    return expr.name.literal
 
 
 @stringify_expr_rule_decorator
 def stringify_expr_string(expr: StringExpr):
-    return '"%s"' % expr.token.literal
+    return '"%s"' % expr.value.literal
 
 
 @stringify_expr_rule_decorator
 def stringify_expr_number(expr: NumberExpr):
-    return format_float(expr.token.literal)
+    return format_float(expr.value.literal)
 
 
 @stringify_expr_rule_decorator
 def stringify_expr_boolean(expr: BooleanExpr):
-    return format_bool(expr.token.literal)
+    return format_bool(expr.value.literal)
 
 
 @stringify_expr_rule_decorator
@@ -1319,22 +1319,22 @@ def quote_rule_decorator(rule_func: QuoteRuleType):
 
 @quote_rule_decorator
 def quote_symbol(expr: SymbolExpr):
-    return SymbolVal(expr.token.literal)
+    return SymbolVal(expr.name.literal)
 
 
 @quote_rule_decorator
 def quote_string(expr: StringExpr):
-    return StringVal(expr.token.literal)
+    return StringVal(expr.value.literal)
 
 
 @quote_rule_decorator
 def quote_number(expr: NumberExpr):
-    return NumberVal(expr.token.literal)
+    return NumberVal(expr.value.literal)
 
 
 @quote_rule_decorator
 def quote_boolean(expr: BooleanExpr):
-    return BooleanVal(expr.token.literal)
+    return BooleanVal(expr.value.literal)
 
 
 @quote_rule_decorator
@@ -1426,24 +1426,24 @@ def eval_sequence(expr: SequenceExpr, env: Environment, evl: EvalRecurFuncType):
 @eval_rule_decorator
 def eval_symbol(expr: SymbolExpr, env: Environment):
     try:
-        return env_lookup(env, expr.token.literal)
+        return env_lookup(env, expr.name.literal)
     except SchemeEnvError:
-        raise SchemeRuntimeError(expr.token, 'symbol undefined')
+        raise SchemeRuntimeError(expr.name, 'symbol undefined')
 
 
 @eval_rule_decorator
 def eval_string(expr: StringExpr):
-    return StringVal(expr.token.literal)
+    return StringVal(expr.value.literal)
 
 
 @eval_rule_decorator
 def eval_number(expr: NumberExpr):
-    return NumberVal(expr.token.literal)
+    return NumberVal(expr.value.literal)
 
 
 @eval_rule_decorator
 def eval_boolean(expr: BooleanExpr):
-    return BooleanVal(expr.token.literal)
+    return BooleanVal(expr.value.literal)
 
 
 @eval_rule_decorator
