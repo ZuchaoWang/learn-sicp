@@ -1469,25 +1469,41 @@ def eval_symbol(expr: SymbolExpr, env: Environment):
         raise SchemeRuntimeError(expr.name, 'symbol undefined')
 
 
-@eval_rule_decorator
-def eval_string(expr: StringExpr):
+def pure_eval_string(expr: StringExpr):
     return StringVal(expr.value.literal)
 
 
 @eval_rule_decorator
-def eval_number(expr: NumberExpr):
+def eval_string(expr: StringExpr):
+    return pure_eval_string(expr)
+
+
+def pure_eval_number(expr: NumberExpr):
     return NumberVal(expr.value.literal)
 
 
 @eval_rule_decorator
-def eval_boolean(expr: BooleanExpr):
+def eval_number(expr: NumberExpr):
+    return pure_eval_number(expr)
+
+
+def pure_eval_boolean(expr: BooleanExpr):
     return BooleanVal(expr.value.literal)
 
 
 @eval_rule_decorator
-def eval_nil():
+def eval_boolean(expr: BooleanExpr):
+    return pure_eval_boolean(expr)
+
+
+def pure_eval_nil():
     '''evaluating empty list expression () gives empty list value ()'''
     return NilVal()
+
+
+@eval_rule_decorator
+def eval_nil():
+    return pure_eval_nil()
 
 
 @eval_rule_decorator
@@ -1495,22 +1511,30 @@ def eval_quote(expr: QuoteExpr):
     return quote_expr(expr.content)
 
 
-def pure_eval_call_prim(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
+def pure_check_prim_arity(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
     if (operator.arity is not None) and (operator.arity != len(operands)):
         raise SchemeRuntimeError(expr.paren, '%s expect %d arguments, get %d' % (
             operator.name, operator.arity, len(operands)))
+
+
+def pure_eval_call_prim(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
+    pure_check_prim_arity(expr, operator, operands)
     try:
         return operator.body(*operands)
     except SchemePrimError as err:
         raise SchemeRuntimeError(expr.paren, err.message)
 
 
-def pure_eval_call_proc_plain(expr: CallExpr, operator: ProcPlainVal, operands: List[SchemeVal], evl: EvalRecurFuncType):
+def pure_check_proc_arity(expr: CallExpr, operator: ProcPlainVal, operands: List[SchemeVal]):
     if len(operator.parameters) != len(operands):
         raise SchemeRuntimeError(expr.paren, '%s expect %d arguments, get %d' % (
             operator.name, len(operator.parameters), len(operands)))
+
+
+def pure_eval_call_proc_plain(expr: CallExpr, operator: ProcPlainVal, operands: List[SchemeVal], evl: EvalRecurFuncType):
+    pure_check_proc_arity(expr, operator, operands)
     new_env = env_extend(operator.env, operator.parameters, operands)
-    return eval_sequence(operator.body, new_env, evl)
+    return evl(operator.body, new_env)
 
 
 def pure_eval_call_invalid(expr: CallExpr, operator: SchemeVal):
@@ -1610,7 +1634,7 @@ def eval_or(expr: OrExpr, env: Environment, evl: EvalRecurFuncType):
 @eval_rule_decorator
 def eval_not(expr: NotExpr, env: Environment, evl: EvalRecurFuncType):
     res = evl(expr.content, env)
-    return BooleanVal(False) if is_truthy(res) else BooleanVal(True)
+    return BooleanVal(not is_truthy(res))
 
 
 def install_eval_rules():

@@ -65,7 +65,7 @@ def stringify_expr_lazy(expr: LazyExpr):
     return '(%s)' % (' '.join(substrs))
 
 
-def install_stringify_lazy_expr_rules():
+def install_stringify_expr_lazy_rules():
     rules = {LazyExpr: stringify_expr_lazy}
     update_stringify_expr_rules(rules)
 
@@ -217,7 +217,7 @@ def install_rules():
     install_resolver_rules()
     install_resolved_eval_rules()
     install_parser_lazy_rules()
-    install_stringify_lazy_expr_rules()
+    install_stringify_expr_lazy_rules()
     install_resolver_lazy_rules()
     install_resolved_eval_lazy_rules()
 
