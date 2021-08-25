@@ -789,6 +789,32 @@ def parse_lambda(expr: ListExpr):
             expr.paren, 'lambda 2nd expression should be list, now %s' % type(expr1).__name__)
 
 
+def parse_let(expr: ListExpr):
+    '''
+    desugar let to lambda and call
+    call.paren = let.paren, lambda.keyword = let.keyword
+    '''
+    if len(expr.expressions) < 3:
+        raise SchemeParserError(
+            expr.paren, 'let should have at least 3 expressions, now %d' % len(expr.expressions))
+    keyword = cast(SymbolExpr, expr.expressions[0]).name
+    expr1 = expr.expressions[1]
+    if isinstance(expr1, ListExpr):
+        if not all([isinstance(subexpr, ListExpr) for subexpr in expr1.expressions]):
+            raise SchemeParserError(expr.paren, 'let 2nd expression should be list of list')
+        names_and_intializers = [cast(ListExpr, subexpr).expressions for subexpr in expr1.expressions]
+        if not all([len(expr_pair) == 2 for expr_pair in names_and_intializers]):
+            raise SchemeParserError(expr.paren, 'let 2nd expression should be list of list of 2 expressions')
+        parameters = parse_parameters(expr.paren, [expr_pair[0] for expr_pair in names_and_intializers])
+        body = SequenceExpr(expr.paren, [parse_list_recursive(subexpr) for subexpr in expr.expressions[2:]])
+        operator = LambdaExpr(keyword, parameters, body)
+        operands = [parse_list_recursive(expr_pair[1]) for expr_pair in names_and_intializers]
+        return CallExpr(expr.paren, operator, operands)
+    else:
+        raise SchemeParserError(
+            expr.paren, 'let 2nd expression should be list, now %s' % type(expr1).__name__)
+
+
 class AndExpr(Expression):
     def __init__(self, keyword: Token, contents: List[Expression]):
         self.keyword = keyword
@@ -849,6 +875,7 @@ def install_parser_rules():
         'if': parse_if,
         'begin': parse_begin,
         'lambda': parse_lambda,
+        'let': parse_let,
         'and': parse_and,
         'or': parse_or,
         'not': parse_not
@@ -1855,6 +1882,17 @@ def test_parse():
     test_one(
         '(define (f x x) (+ x 1))',
         panic='parser error at LEFT_PAREN in line 1: parameters should be unique, now x show up twice'
+    )
+    # desugaring let
+    test_one(
+        '(let ((x 1) (y 2)) (+ x y))',
+        expression='(sequence (call (lambda (x y) (sequence (call + x y))) 1 2))',
+        result='3'
+    )
+    # desugaring let invalid syntax
+    test_one(
+        '(let ((x 1) (y 2 3)) (+ x y))',
+        panic='parser error at LEFT_PAREN in line 1: let 2nd expression should be list of list of 2 expressions'
     )
 
 
