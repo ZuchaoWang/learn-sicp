@@ -685,6 +685,27 @@ class DefineProcExpr(Expression):
         self.body = body
 
 
+def check_duplicate_parameters(parameters: List[Token]):
+    '''if duplicate, return the second token; otherwise return None'''
+    unq: Set[str] = set([])
+    for p in parameters:
+        if p.literal in unq:
+            return p
+        else:
+            unq.add(p.literal)
+    return None
+
+
+def parse_parameters(paren: Token, expressions: List[Expression]):
+    if not all([isinstance(subexpr, SymbolExpr) for subexpr in expressions]):
+        raise SchemeParserError(paren, 'parameters should all be symbolic')
+    parameters = [cast(SymbolExpr, subexpr).name for subexpr in expressions]
+    para_dup = check_duplicate_parameters(parameters)
+    if para_dup is not None:
+        raise SchemeParserError(paren, 'parameters should be unique, now %s show up twice' % para_dup.literal)
+    return parameters
+
+
 def parse_define(expr: ListExpr):
     if len(expr.expressions) < 3:
         raise SchemeParserError(
@@ -705,14 +726,9 @@ def parse_define(expr: ListExpr):
         expr10 = expr1.expressions[0]
         if isinstance(expr10, SymbolExpr):
             name = cast(SymbolExpr, expr10).name
-            para_exprs = expr1.expressions[1:]
-            if all([isinstance(subexpr, SymbolExpr) for subexpr in para_exprs]):
-                parameters = [cast(SymbolExpr, subexpr).name for subexpr in para_exprs]
-                body = SequenceExpr(expr.paren, [parse_list_recursive(subexpr) for subexpr in expr.expressions[2:]])
-                return DefineProcExpr(keyword, name, parameters, body)
-            else:
-                raise SchemeParserError(
-                    expr.paren, 'define procedure should use symbolic parameters')
+            parameters = parse_parameters(expr.paren, expr1.expressions[1:])
+            body = SequenceExpr(expr.paren, [parse_list_recursive(subexpr) for subexpr in expr.expressions[2:]])
+            return DefineProcExpr(keyword, name, parameters, body)
         else:
             raise SchemeParserError(
                 expr.paren, 'define procedure should use symbolic name, now %s' % type(expr10).__name__)
@@ -765,14 +781,9 @@ def parse_lambda(expr: ListExpr):
     keyword = cast(SymbolExpr, expr.expressions[0]).name
     expr1 = expr.expressions[1]
     if isinstance(expr1, ListExpr):
-        para_exprs = expr1.expressions
-        if all([isinstance(subexpr, SymbolExpr) for subexpr in para_exprs]):
-            parameters = [cast(SymbolExpr, subexpr).name for subexpr in para_exprs]
-            body = SequenceExpr(expr.paren, [parse_list_recursive(subexpr) for subexpr in expr.expressions[2:]])
-            return LambdaExpr(keyword, parameters, body)
-        else:
-            raise SchemeParserError(
-                expr.paren, 'lambda should use symbolic parameters')
+        parameters = parse_parameters(expr.paren, expr1.expressions)
+        body = SequenceExpr(expr.paren, [parse_list_recursive(subexpr) for subexpr in expr.expressions[2:]])
+        return LambdaExpr(keyword, parameters, body)
     else:
         raise SchemeParserError(
             expr.paren, 'lambda 2nd expression should be list, now %s' % type(expr1).__name__)
@@ -1839,6 +1850,11 @@ def test_parse():
         '(define (f x) (+ x 1))',
         expression='(sequence (define-proc f (x) (sequence (call + x 1))))',
         result='f'
+    )
+    # define proc same parameter
+    test_one(
+        '(define (f x x) (+ x 1))',
+        panic='parser error at LEFT_PAREN in line 1: parameters should be unique, now x show up twice'
     )
 
 
