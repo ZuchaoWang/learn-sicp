@@ -1,4 +1,32 @@
-def cycle_detect(head):
+from typing import Generic, List, Optional, TypeVar
+
+
+T = TypeVar("T")
+
+
+class LinkedListNode(Generic[T]):
+    def __init__(self, data: T, next: "Optional[LinkedListNode[T]]"):
+        self.data = data
+        self.next = next
+
+    @staticmethod
+    def from_list(ls: List[T]):
+        cur: "Optional[LinkedListNode[T]]" = None
+        for i in range(len(ls)-1, -1, -1):
+            cur = LinkedListNode(ls[i], cur)
+        return cur
+
+    @staticmethod
+    def to_list(ll: "Optional[LinkedListNode[T]]"):
+        ls: List[T] = []
+        cur = ll
+        while cur is not None:
+            ls.append(cur.data)
+            cur = cur.next
+        return ls
+
+
+def cycle_detect(head: Optional[LinkedListNode[T]]):
     '''
     Floyd's hare and tortoise algorithm for cycle detection
     head is the start of a linked list
@@ -9,7 +37,7 @@ def cycle_detect(head):
     and most importantly, it's funny!
 
     why it works?
-    
+
     assuming the first x nodes are linear, then followed by a cycle with y nodes
     then hare will chase tortoise at round ceil(x/y)*y
     because now both hare and tortoise has entered the cycle
@@ -18,26 +46,29 @@ def cycle_detect(head):
     after that, the tortoise just need to move another x steps to find start of cycle
     because ceil(x/y)*y+x is at the position of the start of cycle
     '''
-    if not (head and head['next']):
+    if not (head and head.next):
         return None
-    hare = head['next']['next']
-    tortoise = head['next']
+    hare: Optional[LinkedListNode[T]] = head.next.next
+    tortoise: Optional[LinkedListNode[T]] = head.next
     # start chasing
     while hare != tortoise:
-        if not (hare and hare['next']):
+        if not (hare and hare.next):
             return None
-        hare = hare['next']['next']
-        tortoise = tortoise['next']
+        hare = hare.next.next
+        assert tortoise
+        tortoise = tortoise.next
     assert hare == tortoise
     # find start of cycle
     hare = head
     while hare != tortoise:
-        hare = hare['next']
-        tortoise = tortoise['next']
+        assert hare
+        assert tortoise
+        hare = hare.next
+        tortoise = tortoise.next
     return hare
 
 
-def make_linked_list(n, k=None):
+def make_linked_list(n: int, k: Optional[int] = None):
     '''
     make a linked list of n nodes
     each node has data and next pointer
@@ -46,33 +77,33 @@ def make_linked_list(n, k=None):
     '''
     assert n >= 1
     assert k is None or (k >= 0 and k < n)
-    ll = [{'data': i} for i in range(n)]
+    ll = [LinkedListNode(i, None) for i in range(n)]
     for i in range(n-1):
-        ll[i]['next'] = ll[i+1]
-    ll[n-1]['next'] = None if k is None else ll[k]
+        ll[i].next = ll[i+1]
+    ll[n-1].next = None if k is None else ll[k]
     return ll[0]
 
 
-def stringify_linked_list(n, k=None):
+def stringify_linked_list(n: int, k: Optional[int] = None):
     ll_str = '->'.join([str(i) for i in range(n)])
     if k is not None:
         ll_str += ('->' + str(k))
     return ll_str
 
 
-def test_one(n, k=None):
+def test_one(n: int, k: Optional[int] = None):
     head = make_linked_list(n, k)
     cycle_node = cycle_detect(head)
     # print result
     ll_str = stringify_linked_list(n, k)
     cycle_str = 'acyclic' if cycle_node is None else (
-        'cycle starts at %d' % cycle_node['data'])
+        'cycle starts at %d' % cycle_node.data)
     print('%s: %s' % (ll_str, cycle_str))
     # check result
     if k is None:
         assert cycle_node is None
     else:
-        assert cycle_node['data'] == k
+        assert cycle_node.data == k
 
 
 def test():
