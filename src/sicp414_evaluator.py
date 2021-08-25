@@ -901,7 +901,7 @@ def stringify_expr(expr: Expression):
 
 
 StringifyExprRuleType = Union[
-    Callable[[], SchemeVal],
+    Callable[[], str],
     Callable[[GenericExpr], str],
 ]
 

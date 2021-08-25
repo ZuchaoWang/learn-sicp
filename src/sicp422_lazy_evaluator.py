@@ -66,7 +66,7 @@ def stringify_expr_lazy(expr: LazyExpr):
 
 
 def install_stringify_lazy_expr_rules():
-    rules = {'lazy': stringify_expr_lazy}
+    rules = {LazyExpr: stringify_expr_lazy}
     update_stringify_expr_rules(rules)
 
 
