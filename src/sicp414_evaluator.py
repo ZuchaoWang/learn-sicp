@@ -1094,11 +1094,11 @@ class PairVal(SchemeVal):
     def __init__(self, left: SchemeVal, right: SchemeVal):
         self.left = left
         self.right = right
-        self.token: Optional[Token] = None
 
 
 class PrimVal(SchemeVal):
-    def __init__(self, name: str, arity: int, body: Callable[..., SchemeVal]):
+    def __init__(self, name: str, arity: Optional[int], body: Callable[..., SchemeVal]):
+        '''arity is None if any number of parameters are acceptable, such as list'''
         self.name = name
         self.arity = arity
         self.body = body
@@ -1496,7 +1496,7 @@ def eval_quote(expr: QuoteExpr):
 
 
 def pure_eval_call_prim(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
-    if operator.arity != len(operands):
+    if (operator.arity is not None) and (operator.arity != len(operands)):
         raise SchemeRuntimeError(expr.paren, '%s expect %d arguments, get %d' % (
             operator.name, operator.arity, len(operands)))
     try:
@@ -1639,11 +1639,20 @@ def install_eval_rules():
 '''primitive definitions'''
 
 
+def get_py_func_arity(py_func: Callable):
+    rf = inspect.getfullargspec(py_func)
+    if rf.varargs: # in case of f(*args)
+        assert len(rf.args) == 0
+        return None
+    else: # in case of f() or f(x)
+        return len(rf.args)
+
+
 def register_primitives(env: Environment, primitives: Dict[str, Callable]):
     '''add a batch of primitives to environment'''
     for name in primitives:
         py_func = primitives[name]
-        arity = len(inspect.getfullargspec(py_func).args)
+        arity = get_py_func_arity(py_func)
         primitive = PrimVal(name, arity, py_func)
         env_define(env, name, primitive)
 
@@ -1705,6 +1714,10 @@ def prim_cons(x: SchemeVal, y: SchemeVal):
     return PairVal(x, y)
 
 
+def prim_list(*args: SchemeVal):
+    return pair_from_list(list(args))
+
+
 def prim_pair(x: SchemeVal) -> BooleanVal:
     return BooleanVal(isinstance(x, PairVal))
 
@@ -1738,6 +1751,7 @@ def make_primitives():
         'car': prim_car,
         'cdr': prim_cdr,
         'cons': prim_cons,
+        'list': prim_list,
         'pair?': prim_pair,
         'null?': prim_null,
         'display': prim_display,
@@ -1998,6 +2012,13 @@ def test_eval():
         ((f))
         ''',
         result='1'
+    )
+    # list primitive
+    test_one(
+        '''
+        (list (+ 1 2) (+ 3 4) (list 5 6))
+        ''',
+        result='(3 7 (5 6))'
     )
     # return lambda to test find_type in ValueStringifier
     test_one(
