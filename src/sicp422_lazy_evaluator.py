@@ -31,7 +31,7 @@ we will not do that
 from typing import List, Optional
 from sicp414_evaluator import AndExpr, SequenceExpr, BooleanVal, CallExpr, Environment, EvalRecurFuncType, Expression, \
     IfExpr, ListExpr, NilVal, NotExpr, OrExpr, PrimVal, ProcPlainVal, SchemePanic, SchemeParserError, SchemeRuntimeError, \
-    SchemeVal, SequenceExpr, Token, TokenTag, UndefVal, env_extend, install_is_equal_rules, install_parser_rules, install_quote_rules, install_stringify_expr_rules, \
+    SchemeVal, SequenceExpr, Token, TokenTag, UndefVal, env_extend, install_is_equal_rules, install_parser_rules, install_primitives, install_quote_rules, install_stringify_expr_rules, \
     install_stringify_value_rules, is_truthy, make_global_env, parse_list_recursive, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, \
     scan_source, scheme_flush, stringify_expr, stringify_expr_rule_decorator, stringify_value, update_parser_rules, update_stringify_expr_rules
 from sicp416_resolver import ResBindingsType, ResRecurFuncType, ResStackType, install_resolved_eval_rules, install_resolver_rules, resolve_expr, \
@@ -216,6 +216,8 @@ def install_rules():
     install_quote_rules()
     install_resolver_rules()
     install_resolved_eval_rules()
+    install_primitives()
+    # lazy rules
     install_parser_lazy_rules()
     install_stringify_expr_lazy_rules()
     install_resolver_lazy_rules()

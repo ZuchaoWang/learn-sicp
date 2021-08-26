@@ -39,8 +39,8 @@ from sicp414_evaluator import AndExpr, SequenceExpr, BooleanExpr, CallExpr, Defi
     EvalRecurFuncType, Expression, GenericExpr, IfExpr, LambdaExpr, ListExpr, NilExpr, NotExpr, NumberExpr, OrExpr, QuoteExpr, \
     SchemeEnvError, SchemePanic, SchemeRuntimeError, SchemeVal, SetExpr, StringExpr, SymbolExpr, Token, \
     eval_and, eval_boolean, eval_call, eval_sequence, eval_define_proc, eval_define_var, eval_if, \
-    eval_lambda, eval_nil, eval_not, eval_number, eval_or, eval_quote, eval_string, \
-    find_type, install_is_equal_rules, install_parser_rules, install_quote_rules, install_stringify_expr_rules, \
+    eval_lambda, eval_nil, eval_not, eval_number, eval_or, eval_quote, eval_string, find_type, \
+    install_is_equal_rules, install_parser_rules, install_primitives, install_quote_rules, install_stringify_expr_rules, \
     install_stringify_value_rules, make_global_env, parse_tokens, scan_source, scheme_flush, scheme_panic, stringify_value
 
 
@@ -437,6 +437,7 @@ def install_rules():
     install_quote_rules()
     install_resolver_rules()
     install_resolved_eval_rules()
+    install_primitives()
 
 
 def test_one(source: str, **kargs: str):

@@ -16,7 +16,7 @@ from sicp414_evaluator import AndExpr, SequenceExpr, BooleanExpr, BooleanVal, Ca
     Environment, Expression, GenericExpr, IfExpr, LambdaExpr, NilExpr, NilVal, NotExpr, NumberExpr, NumberVal, OrExpr, \
     PrimVal, ProcVal, QuoteExpr, SchemePanic, SchemeRuntimeError, SchemeVal, SequenceExpr, SetExpr, SymbolVal, UndefVal, \
     StringExpr, StringVal, SymbolExpr, Token, env_define, env_extend, find_type, \
-    install_is_equal_rules, install_parser_rules, install_quote_rules, \
+    install_is_equal_rules, install_parser_rules, install_primitives, install_quote_rules, \
     install_stringify_expr_rules, install_stringify_value_rules, is_truthy, \
     make_global_env, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_define_var, \
     quote_expr, scan_source, scheme_flush, scheme_panic, stringify_value
@@ -291,6 +291,7 @@ def install_rules():
     install_quote_rules()
     install_resolver_rules()
     install_analyzer_rules()
+    install_primitives()
 
 
 def test_one(source: str, **kargs: str):

@@ -1312,6 +1312,15 @@ def pair_from_list(sv_list: List[SchemeVal]):
     return head
 
 
+def pair_to_list(sv: Union[NilVal, PairVal]):
+    '''ignore the case where last pair's cdr is not nil'''
+    sv_list: List[SchemeVal] = []
+    head = sv
+    while isinstance(head, PairVal):
+        sv_list.append(head.left)
+    return sv_list
+
+
 def pair_length(sv: PairVal):
     count = 0
     head: SchemeVal = sv
@@ -1662,6 +1671,18 @@ def install_eval_rules():
 
 '''primitive definitions'''
 
+_primitives = {}
+
+
+def update_primitives(prims: Dict[str, Callable]):
+    _primitives.update(prims)
+
+
+def make_global_env():
+    glbenv = Environment({})
+    register_primitives(glbenv, _primitives)
+    return glbenv
+
 
 def get_py_func_arity(py_func: Callable):
     rf = inspect.getfullargspec(py_func)
@@ -1760,8 +1781,8 @@ def prim_newline():
     return UndefVal()
 
 
-def make_primitives():
-    return {
+def install_primitives():
+    prims = {
         '+': prim_op_add,
         '-': prim_op_sub,
         '*': prim_op_mul,
@@ -1781,6 +1802,7 @@ def make_primitives():
         'display': prim_display,
         'newline': prim_newline,
     }
+    update_primitives(prims)
 
 
 '''initialize test'''
@@ -1793,13 +1815,7 @@ def install_rules():
     install_is_equal_rules()
     install_quote_rules()
     install_eval_rules()
-
-
-def make_global_env():
-    glbenv = Environment({})
-    primitives = make_primitives()
-    register_primitives(glbenv, primitives)
-    return glbenv
+    install_primitives()
 
 
 def test_one(source: str, **kargs: str):
