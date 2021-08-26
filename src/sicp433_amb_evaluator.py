@@ -1,8 +1,8 @@
 import inspect
 from typing import Any, Callable, Dict, Generic, List, Optional, Type, TypeVar, Union, cast
 from sicp331_cycle_detect import LinkedListNode
-from sicp414_evaluator import AndExpr, BooleanExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, GenericExpr, IfExpr, LambdaExpr, ListExpr, NilExpr, NotExpr, NumberExpr, OrExpr, PairVal, PrimVal, ProcPlainVal, QuoteExpr, SchemeParserError, SchemeRuntimeError, SchemeVal, SequenceExpr, SetExpr, StringExpr, SymbolExpr, Token, UndefVal, env_extend, eval_string, find_type, is_truthy, pair_from_list, pure_check_proc_arity, pure_eval_boolean, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_call_proc_plain, pure_eval_define_proc_plain, pure_eval_define_var, pure_eval_nil, pure_eval_number, pure_eval_string, quote_expr, scheme_panic, stringify_expr, stringify_expr_rule_decorator, update_parser_rules, update_stringify_expr_rules
-from sicp416_resolver import ResDistancesType, ResRecurFuncType, env_lookup_at, env_set_at, pure_resolved_eval_set, pure_resolved_eval_symbol, resolver_rule_decorator, update_resolver_rules
+from sicp414_evaluator import AndExpr, BooleanExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, GenericExpr, IfExpr, LambdaExpr, ListExpr, NilExpr, NilVal, NotExpr, NumberExpr, NumberVal, OrExpr, PairVal, PrimVal, ProcPlainVal, QuoteExpr, SchemePanic, SchemeParserError, SchemePrimError, SchemeRuntimeError, SchemeVal, SequenceExpr, SetExpr, StringExpr, SymbolExpr, Token, UndefVal, env_extend, eval_string, find_type, install_is_equal_rules, install_parser_rules, install_primitives, install_quote_rules, install_stringify_expr_rules, install_stringify_value_rules, is_truthy, make_global_env, pair_from_list, pair_to_list, parse_list_recursive, parse_tokens, pure_check_proc_arity, pure_eval_boolean, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_call_proc_plain, pure_eval_define_proc_plain, pure_eval_define_var, pure_eval_nil, pure_eval_number, pure_eval_string, quote_expr, scan_source, scheme_flush, scheme_panic, stringify_expr, stringify_expr_rule_decorator, stringify_value, update_parser_rules, update_primitives, update_stringify_expr_rules
+from sicp416_resolver import ResDistancesType, ResRecurFuncType, env_lookup_at, env_set_at, install_resolver_rules, pure_resolved_eval_set, pure_resolved_eval_symbol, resolve_expr, resolver_rule_decorator, update_resolver_rules
 
 
 class AmbExpr(ListExpr):
@@ -26,11 +26,14 @@ def parse_require(expr: ListExpr):
         raise SchemeParserError(
             expr.paren, 'require should have 2 expressions, now %d' % len(expr.expressions))
     keyword = cast(SymbolExpr, expr.expressions[0]).name
-    return IfExpr(keyword, NotExpr(keyword, expr.expressions[1]), AmbExpr(keyword, []), None)
+    return IfExpr(keyword, NotExpr(keyword, parse_list_recursive(expr.expressions[1])), AmbExpr(keyword, []), None)
 
 
 def install_parser_amb_rules():
-    rules = {'amb': parse_amb}
+    rules = {
+        'amb': parse_amb,
+        'require': parse_require
+    }
     update_parser_rules(rules)
 
 
@@ -204,8 +207,7 @@ def amb_eval_sequence(expr: SequenceExpr, env: Environment, succeed: AmbEvalSuce
 
 @amb_eval_rule_decorator
 def amb_eval_symbol(expr: SymbolExpr, env: Environment, succeed: AmbEvalSuceedFuncType, amb_eval: AmbEvalRecurFuncType, distances: ResDistancesType):
-    result = pure_resolved_eval_symbol(expr, env, distances)
-    succeed(result)
+    succeed(pure_resolved_eval_symbol(expr, env, distances))
 
 
 @amb_eval_rule_decorator
@@ -278,7 +280,7 @@ def amb_eval_define_proc(expr: DefineProcExpr, env: Environment, succeed: AmbEva
 
 
 @amb_eval_rule_decorator
-def eval_if(expr: IfExpr, env: Environment, succeed: AmbEvalSuceedFuncType, amb_eval: AmbEvalRecurFuncType):
+def amb_eval_if(expr: IfExpr, env: Environment, succeed: AmbEvalSuceedFuncType, amb_eval: AmbEvalRecurFuncType):
     def _succeed_pred(pred_val: SchemeVal):
         if is_truthy(pred_val):
             amb_eval(expr.then_branch, env, succeed)
@@ -300,14 +302,16 @@ def amb_eval_lambda(expr: LambdaExpr, env: Environment, succeed: AmbEvalSuceedFu
 def amb_eval_and(expr: AndExpr, env: Environment, succeed: AmbEvalSuceedFuncType, amb_eval: AmbEvalRecurFuncType):
     def _succeed_contents(contents: List[SchemeVal]):
         succeed(contents[-1])
-    pure_amb_eval_list(expr.contents, env, _succeed_contents, amb_eval, False) # try each one until not truthy
+    pure_amb_eval_list(expr.contents, env, _succeed_contents,
+                       amb_eval, False)  # try each one until not truthy
 
 
 @amb_eval_rule_decorator
 def amb_eval_or(expr: OrExpr, env: Environment, succeed: AmbEvalSuceedFuncType, amb_eval: AmbEvalRecurFuncType):
     def _succeed_contents(contents: List[SchemeVal]):
         succeed(contents[-1])
-    pure_amb_eval_list(expr.contents, env, _succeed_contents, amb_eval, True) # try each one until truthy
+    pure_amb_eval_list(expr.contents, env, _succeed_contents,
+                       amb_eval, True)  # try each one until truthy
 
 
 @amb_eval_rule_decorator
@@ -333,3 +337,211 @@ def amb_eval_amb(expr: AmbExpr, env: Environment, succeed: AmbEvalSuceedFuncType
             amb_eval(expr.contents[i], env, _succeed_at)
 
     _try_next(0)
+
+
+def install_amb_eval_rules():
+    rules = {
+        SequenceExpr: amb_eval_sequence,
+        SymbolExpr: amb_eval_symbol,
+        StringExpr: amb_eval_string,
+        NumberExpr: amb_eval_number,
+        BooleanExpr: amb_eval_boolean,
+        NilExpr: amb_eval_nil,
+        QuoteExpr: amb_eval_quote,
+        CallExpr: amb_eval_call,
+        SetExpr: amb_eval_set,
+        DefineVarExpr: amb_eval_define_var,
+        DefineProcExpr: amb_eval_define_proc,
+        LambdaExpr: amb_eval_lambda,
+        IfExpr: amb_eval_if,
+        AndExpr: amb_eval_and,
+        OrExpr: amb_eval_or,
+        NotExpr: amb_eval_not,
+        AmbExpr: amb_eval_amb
+    }
+    update_amb_eval_rules(rules)
+
+
+'''helper primitives'''
+
+
+def prim_uniq_num(sv: SchemeVal):
+    '''
+    a direct way to test list uniqueness, assuming input is a list of numbers
+    to be used in logic puzzle
+    '''
+    if isinstance(sv, (NilVal, PairVal)):
+        ls = pair_to_list(sv)
+        if all([isinstance(subsv, NumberVal) for subsv in ls]):
+            return len(set(ls)) == len(ls)
+    raise SchemePrimError('should be list of numbers')
+
+
+def install_amb_primitives():
+    prims = {'uniq?': prim_uniq_num}
+    update_primitives(prims)
+
+
+def install_rules():
+    install_parser_rules()
+    install_stringify_expr_rules()
+    install_stringify_value_rules()
+    install_is_equal_rules()
+    install_quote_rules()
+    install_resolver_rules()
+    install_primitives()
+    # amb rules
+    install_parser_amb_rules()
+    install_stringify_expr_amb_rules()
+    install_resolver_amb_rules()
+    install_amb_eval_rules()
+    install_amb_primitives()
+
+
+'''test begins'''
+
+
+def test_one(source: str, **kargs: str):
+    '''
+    each test tries to execute the source code as much as possible
+    capture the output, panic and result
+    print them and compare to expected value
+    '''
+
+    # source
+    source = source.strip()
+    print('* source: %s' % source)
+    try:
+        # scan
+        tokens = scan_source(source)
+
+        # parse
+        expr = parse_tokens(tokens)
+
+        # resolve
+        distances = resolve_expr(expr)
+
+        # evaluate
+        glbenv = make_global_env()
+        result = amb_evaluate_expr(expr, glbenv, distances, 3)
+        result_str = stringify_value(result)
+        output_str = scheme_flush()
+        if len(output_str):
+            print('* output: %s' % output_str)
+        if 'output' in kargs:
+            assert output_str == kargs['output']
+        print('* result: %s' % result_str)
+        if 'result' in kargs:
+            assert result_str == kargs['result']
+    except SchemePanic as err:
+        print('* panic: %s' % err.message)
+        assert err.message == kargs['panic']
+
+    print('----------')
+
+
+def test_non_amb():
+    # if
+    test_one(
+        '''
+        (define x (if #t 1 2))
+        (if (= x 1) (display "a"))
+        (if (= x 2) (display "b"))
+        ''',
+        output='a',
+        result='(#<undef>)'
+    )
+    # single recursion
+    test_one(
+        '''
+        (define (run)
+          (define (factorial n)
+            (if (= n 1)
+              1
+              (* n (factorial (- n 1)))))
+          (factorial 5))
+        (run)
+        ''',
+        result='(120)'
+    )
+    # mutual recursion
+    test_one(
+        '''
+        (define (f)
+          (define (even n) (if (= n 0) #t (odd (- n 1))))
+          (define (odd n) (if (= n 0) #f (even (- n 1))))
+          (even 5))
+        (f)
+        ''',
+        result='(#f)'
+    )
+
+
+def test_amb():
+    # simple pair
+    test_one(
+        '''
+        (define a (amb 1 2 ))
+        (define b (amb 3 4))
+        (list a b)
+        ''',
+        result='((1 3) (1 4) (2 3))'
+    )
+    # require
+    test_one(
+        '''
+        (define a (amb 1 2 ))
+        (define b (amb 3 4))
+        (require (> (+ a b) 4))
+        (list a b)
+        ''',
+        result='((1 4) (2 3) (2 4))'
+    )
+    
+
+def test_logic_puzzle():
+    '''have to reformulate it a little bit to avoid "maximum recursion depth exceeded"'''
+    test_one(
+        '''
+        (define (abs x)
+          (if (< x 0) (- 0 x) x))
+        (define (multiple-dwelling)
+          (define baker (amb 1 2 3 4))
+
+          (define cooper (amb 2 3 4 5))
+          (require (not (= cooper baker)))
+
+          (define fletcher (amb 2 3 4))
+          (require (not (= fletcher baker)))
+          (require (not (= fletcher cooper)))
+          (require (not (= (abs (- fletcher cooper)) 1)))
+
+          (define miller (amb 1 2 3 4 5))
+          (require (not (= miller baker)))
+          (require (not (= miller cooper)))
+          (require (not (= miller fletcher)))
+          (require (> miller cooper))
+
+          (define smith (amb 1 2 3 4 5))
+          (require (not (= smith baker)))
+          (require (not (= smith cooper)))
+          (require (not (= smith fletcher)))
+          (require (not (= smith miller)))
+          (require (not (= (abs (- smith fletcher)) 1)))
+
+          (list baker cooper fletcher miller smith))
+        (multiple-dwelling)
+        ''',
+        result='((3 2 4 5 1))'
+    )
+
+
+def test():
+    test_non_amb()
+    test_amb()
+    test_logic_puzzle()
+
+
+if __name__ == '__main__':
+    install_rules()
+    test()
