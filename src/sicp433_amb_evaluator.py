@@ -73,8 +73,17 @@ def install_resolver_amb_rules():
 '''
 amb evaluator
 we build it from resolved evaluator, it does not support lazy evaluation
+
 evaluated value is passed to succeed callback function, not directly returned
-here we use exception to replace the fail callback function, because it backtraces more elegantly
+the succeed function nested later expressions inside early expressions, creating very deep call stack frames
+this limits the total number of expressions, thus limiting the size of the problem
+this is unfortunately, and is due to the fact that we use python call stack frame to implement amb expression chain
+we may need to explicitly model the amb expression chain, such as using bytecode to avoid this problem, but I won't do it
+
+also notice we use exception to replace the fail callback function
+this is because exception help us avoid simply passing down fail function, and differentiating fail and fail_after
+besides, it can jump back multiple steps on the call stack frames
+therefore I feel exception based backtrace is more elegantly
 '''
 
 AmbEvalSuceedFuncType = Callable[[SchemeVal], None]
