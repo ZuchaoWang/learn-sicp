@@ -1,8 +1,17 @@
 import inspect
-from typing import Any, Callable, Dict, Generic, List, Optional, Type, TypeVar, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Type, Union, cast
 from sicp331_cycle_detect import LinkedListNode
-from sicp414_evaluator import AndExpr, BooleanExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, GenericExpr, IfExpr, LambdaExpr, ListExpr, NilExpr, NilVal, NotExpr, NumberExpr, NumberVal, OrExpr, PairVal, PrimVal, ProcPlainVal, QuoteExpr, SchemePanic, SchemeParserError, SchemePrimError, SchemeRuntimeError, SchemeVal, SequenceExpr, SetExpr, StringExpr, SymbolExpr, Token, UndefVal, env_extend, eval_string, find_type, install_is_equal_rules, install_parser_rules, install_primitives, install_quote_rules, install_stringify_expr_rules, install_stringify_value_rules, is_truthy, make_global_env, pair_from_list, pair_to_list, parse_list_recursive, parse_tokens, pure_check_proc_arity, pure_eval_boolean, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_call_proc_plain, pure_eval_define_proc_plain, pure_eval_define_var, pure_eval_nil, pure_eval_number, pure_eval_string, quote_expr, scan_source, scheme_flush, scheme_panic, stringify_expr, stringify_expr_rule_decorator, stringify_value, update_parser_rules, update_primitives, update_stringify_expr_rules
-from sicp416_resolver import ResDistancesType, ResRecurFuncType, env_lookup_at, env_set_at, install_resolver_rules, pure_resolved_eval_set, pure_resolved_eval_symbol, resolve_expr, resolver_rule_decorator, update_resolver_rules
+from sicp414_evaluator import AndExpr, BooleanExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, \
+    Environment, Expression, GenericExpr, IfExpr, LambdaExpr, ListExpr, NilExpr, NotExpr, NumberExpr, OrExpr, \
+    PairVal, PrimVal, ProcPlainVal, QuoteExpr, SchemePanic, SchemeParserError, SchemeRuntimeError, \
+    SchemeVal, SequenceExpr, SetExpr, StringExpr, SymbolExpr, Token, UndefVal, env_extend, find_type, \
+    install_is_equal_rules, install_parser_rules, install_primitives, install_quote_rules, install_stringify_expr_rules, \
+    install_stringify_value_rules, is_truthy, make_global_env, pair_from_list, parse_list_recursive, parse_tokens, pure_check_proc_arity, \
+    pure_eval_boolean, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_define_proc_plain, pure_eval_define_var, pure_eval_nil, \
+    pure_eval_number, pure_eval_string, quote_expr, scan_source, scheme_flush, scheme_panic, stringify_expr, stringify_expr_rule_decorator, \
+    stringify_value, update_parser_rules, update_stringify_expr_rules
+from sicp416_resolver import ResDistancesType, ResRecurFuncType, env_lookup_at, env_set_at, install_resolver_rules, pure_resolved_eval_set, \
+    pure_resolved_eval_symbol, resolve_expr, resolver_rule_decorator, update_resolver_rules
 
 
 class AmbExpr(ListExpr):
@@ -65,7 +74,7 @@ def install_resolver_amb_rules():
 amb evaluator
 we build it from resolved evaluator, it does not support lazy evaluation
 evaluated value is passed to succeed callback function, not directly returned
-here we use exception to replace the fail callback function
+here we use exception to replace the fail callback function, because it backtraces more elegantly
 '''
 
 AmbEvalSuceedFuncType = Callable[[SchemeVal], None]
@@ -103,8 +112,8 @@ def amb_evaluate_expr(expr: SequenceExpr, env: Environment, distances: ResDistan
     instead of interactively try-again to get next values
     we specify limit, so that we get at most limit values at once
 
-    _succeed_root is the root level succeed callback
-    it is specified at root level, but will be passed down to deepest level
+    _succeed_root is the root level succeed callback, it retries next until limit is reached
+    it is specified at root level, but will be passed down to the deepest level
     we use AmbEvalFailure to replace failure callback
     '''
     def _amb_evaluate_recursive(expr: Expression, env: Environment, succeed: AmbEvalSuceedFuncType) -> None:
@@ -120,7 +129,14 @@ def amb_evaluate_expr(expr: SequenceExpr, env: Environment, distances: ResDistan
         nonlocal limit
         limit -= 1
         if limit > 0:
-            # fake a failure to let it retry
+            '''
+            fake a failure to let it retry
+            although this failure is specified at root level
+            it is executed at the deepest level
+            
+            exception does not bubble up environment chain
+            instead it bubbles up call stack frames
+            '''
             raise AmbEvalFailure()
 
     try:
@@ -152,23 +168,28 @@ AmbEvalRuleType = Union[
 def amb_eval_rule_decorator(rule_func: AmbEvalRuleType):
     arity = len(inspect.getfullargspec(rule_func).args)
 
-    def _amb_eval_rule_wrapped(expr: Expression, env: Environment, succeed: AmbEvalSuceedFuncType, amb_eval: AmbEvalRecurFuncType, distances: ResDistancesType):
+    def _amb_eval_rule_wrapped(expr: Expression, env: Environment, succeed: AmbEvalSuceedFuncType,
+                               amb_eval: AmbEvalRecurFuncType, distances: ResDistancesType):
         args: List[Any] = [expr, env, succeed, amb_eval, distances]
         return rule_func(*args[0:arity])
     return _amb_eval_rule_wrapped
 
 
-def pure_amb_eval_linked_list(expressions: Optional[LinkedListNode[Expression]], env: Environment, succeed_linked_list: Callable[[Optional[LinkedListNode[SchemeVal]]], None], amb_eval: AmbEvalRecurFuncType, stop: Optional[bool]):
+def pure_amb_eval_linked_list(expressions: Optional[LinkedListNode[Expression]], env: Environment,
+                              succeed_linked_list: Callable[[Optional[LinkedListNode[SchemeVal]]], None],
+                              amb_eval: AmbEvalRecurFuncType, stop: Optional[bool]):
     '''
     accept a linked list of expressions, ambeval them, then in the callback succeed_linked_list pass a linked list of result
     to ambeval all expressions, we first ambeval the first, then ambeval the rest recursively
 
     in phase one, we purely evaluate expressions in order:
     first expression, then second, ..., finally last expression
+    the results are stored in call stack frames
     failure can only happen in this phase 
 
     in phase two, we build the result linked list in reverse order via succeed callback:
     first build a linked list only of the last result, then prepend the second-but-last, ..., finally prepend the first result
+    the _succeed_linked_list_rest continuation function is called at the very end together, quickly collecting results from call stack frames
     linked list is much more efficient in this phase, that's why we use linked list instead of list
     '''
     if expressions is None:
@@ -189,7 +210,9 @@ def pure_amb_eval_linked_list(expressions: Optional[LinkedListNode[Expression]],
         amb_eval(expressions.data, env, _pure_amb_eval_linked_list_rest)
 
 
-def pure_amb_eval_list(expressions: List[Expression], env: Environment, succeed_list: Callable[[List[SchemeVal]], None], amb_eval: AmbEvalRecurFuncType, stop: Optional[bool]):
+def pure_amb_eval_list(expressions: List[Expression], env: Environment, succeed_list: Callable[[List[SchemeVal]], None],
+                       amb_eval: AmbEvalRecurFuncType, stop: Optional[bool]):
+    '''we provide an interface with pure list, since this is more convenient than linked list'''
     def _succeed_linked_list(results: Optional[LinkedListNode[SchemeVal]]):
         succeed_list(LinkedListNode.to_list(results))
     pure_amb_eval_linked_list(LinkedListNode.from_list(
@@ -206,7 +229,8 @@ def amb_eval_sequence(expr: SequenceExpr, env: Environment, succeed: AmbEvalSuce
 
 
 @amb_eval_rule_decorator
-def amb_eval_symbol(expr: SymbolExpr, env: Environment, succeed: AmbEvalSuceedFuncType, amb_eval: AmbEvalRecurFuncType, distances: ResDistancesType):
+def amb_eval_symbol(expr: SymbolExpr, env: Environment, succeed: AmbEvalSuceedFuncType,
+                    amb_eval: AmbEvalRecurFuncType, distances: ResDistancesType):
     succeed(pure_resolved_eval_symbol(expr, env, distances))
 
 
@@ -237,6 +261,7 @@ def amb_eval_quote(expr: QuoteExpr, env: Environment, succeed: AmbEvalSuceedFunc
 
 @amb_eval_rule_decorator
 def amb_eval_call(expr: CallExpr, env: Environment, succeed: AmbEvalSuceedFuncType, amb_eval: AmbEvalRecurFuncType):
+    '''first calculate operator, then operands, finally body'''
     def _succeed_operator(operator: SchemeVal):
         def _succeed_operands(operands: List[SchemeVal]):
             if isinstance(operator, PrimVal):
@@ -254,13 +279,17 @@ def amb_eval_call(expr: CallExpr, env: Environment, succeed: AmbEvalSuceedFuncTy
 
 
 @amb_eval_rule_decorator
-def amb_eval_set(expr: SetExpr, env: Environment, succeed: AmbEvalSuceedFuncType, amb_eval: AmbEvalRecurFuncType, distances: ResDistancesType):
+def amb_eval_set(expr: SetExpr, env: Environment, succeed: AmbEvalSuceedFuncType,
+                 amb_eval: AmbEvalRecurFuncType, distances: ResDistancesType):
     def _succeed_initializer(initializer: SchemeVal):
         old_value = env_lookup_at(env, distances[expr], expr.name.literal)
         try:
             succeed(pure_resolved_eval_set(expr, initializer, env, distances))
         except AmbEvalFailure:
-            '''revert to old_value, then raise failure to upper level'''
+            '''
+            undo sideeffect: revert to old_value
+            then raise failure to upper level
+            '''
             env_set_at(env, distances[expr], expr.name.literal, old_value)
             raise AmbEvalFailure()
     amb_eval(expr.initializer, env, _succeed_initializer)
@@ -327,13 +356,13 @@ def amb_eval_amb(expr: AmbExpr, env: Environment, succeed: AmbEvalSuceedFuncType
 
     def _try_next(i: int):
         if i == n:
-            raise AmbEvalFailure()
+            raise AmbEvalFailure() # in case of candidate exhaustion
         else:
             def _succeed_at(result: SchemeVal):
                 try:
                     succeed(result)
                 except AmbEvalFailure:
-                    _try_next(i+1)
+                    _try_next(i+1) # in case of failure afterwards
             amb_eval(expr.contents[i], env, _succeed_at)
 
     _try_next(0)
@@ -476,7 +505,7 @@ def test_amb():
         ''',
         result='((1 4) (2 3) (2 4))'
     )
-    
+
 
 def test_logic_puzzle():
     '''have to reformulate it a little bit to avoid "maximum recursion depth exceeded"'''
