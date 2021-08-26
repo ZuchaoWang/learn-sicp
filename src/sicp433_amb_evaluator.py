@@ -362,26 +362,6 @@ def install_amb_eval_rules():
     update_amb_eval_rules(rules)
 
 
-'''helper primitives'''
-
-
-def prim_uniq_num(sv: SchemeVal):
-    '''
-    a direct way to test list uniqueness, assuming input is a list of numbers
-    to be used in logic puzzle
-    '''
-    if isinstance(sv, (NilVal, PairVal)):
-        ls = pair_to_list(sv)
-        if all([isinstance(subsv, NumberVal) for subsv in ls]):
-            return len(set(ls)) == len(ls)
-    raise SchemePrimError('should be list of numbers')
-
-
-def install_amb_primitives():
-    prims = {'uniq?': prim_uniq_num}
-    update_primitives(prims)
-
-
 def install_rules():
     install_parser_rules()
     install_stringify_expr_rules()
@@ -395,7 +375,6 @@ def install_rules():
     install_stringify_expr_amb_rules()
     install_resolver_amb_rules()
     install_amb_eval_rules()
-    install_amb_primitives()
 
 
 '''test begins'''
