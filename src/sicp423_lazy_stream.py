@@ -68,8 +68,11 @@ def test():
     # calculateing natural e, see sicp354_diff_equation.py
     # unfortunately, lst-ref recursion quickly results in "max stack depth exceeded"
     # that's why we can only use small steps, and cannot get very accurate
-    # this can be solved either via tail call optimization, or iteration without procedure call
-    # but I won't do that
+    # this can be mitigated by increaseing recursion limit: sys.setrecursionlimit(...)
+    # it can be solved either via tail call optimization, or iteration without procedure call
+    # we can also implement a pure iteration primitive that relies on python iteration without function call
+    # but then the primitive need to be able to call custom procedures, which is hard
+    # overall, I won't do that
     test_one(shared_lib + \
       '''
       (define (solve f y0 dt)

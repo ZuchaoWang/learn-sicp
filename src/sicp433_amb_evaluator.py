@@ -1,3 +1,4 @@
+import sys
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Type, Union, cast
 from sicp331_cycle_detect import LinkedListNode
@@ -23,7 +24,8 @@ class AmbExpr(ListExpr):
 def parse_amb(expr: ListExpr):
     '''parse amb from list expression'''
     keyword = cast(SymbolExpr, expr.expressions[0]).name
-    return AmbExpr(keyword, expr.expressions[1:])
+    contents = [parse_list_recursive(subexpr) for subexpr in expr.expressions[1:]]
+    return AmbExpr(keyword, contents)
 
 
 def parse_require(expr: ListExpr):
@@ -517,18 +519,21 @@ def test_amb():
 
 
 def test_logic_puzzle():
-    '''have to reformulate it a little bit to avoid "maximum recursion depth exceeded"'''
     test_one(
         '''
         (define (abs x)
           (if (< x 0) (- 0 x) x))
         (define (multiple-dwelling)
-          (define baker (amb 1 2 3 4))
+          (define baker (amb 1 2 3 4 5))
+          (require (not (= baker 5)))
 
-          (define cooper (amb 2 3 4 5))
+          (define cooper (amb 1 2 3 4 5))
+          (require (not (= cooper 1)))
           (require (not (= cooper baker)))
 
-          (define fletcher (amb 2 3 4))
+          (define fletcher (amb 1 2 3 4 5))
+          (require (not (= fletcher 1)))
+          (require (not (= fletcher 5)))
           (require (not (= fletcher baker)))
           (require (not (= fletcher cooper)))
           (require (not (= (abs (- fletcher cooper)) 1)))
@@ -553,12 +558,79 @@ def test_logic_puzzle():
     )
 
 
+def test_parsing_nlp():
+    shared_lib = '''
+      (define nouns '(n student professor cat class))
+      (define verbs '(v studies lectures eats sleeps))
+      (define articles '(a the a))
+      (define prepositions '(p for to in by with))
+
+      (define (memq x ls)
+        (if (not (pair? ls)) #f
+          (or (equal? x (car ls))
+              (memq x (cdr ls)))))
+
+      (define (parse-sentence words)
+        (define cursor words)
+
+        (define (parse-word dict)
+          (require (pair? cursor))
+          (require (memq (car cursor) (cdr dict)))
+          (define found (car cursor))
+          (set! cursor (cdr cursor))
+          found)
+
+        (define (parse-simple-noun-phrase)
+          (list (parse-word articles) (parse-word nouns)))
+
+        (define (parse-prepositional-phrase)
+          (list (parse-word prepositions) (parse-noun-phrase)))
+
+        (define (parse-noun-phrase)
+          (define (maybe-extend noun-phrase)
+            (amb noun-phrase
+              (maybe-extend
+                (list noun-phrase (parse-prepositional-phrase)))))
+          (maybe-extend (parse-simple-noun-phrase)))
+
+        (define (parse-verb-phrase)
+          (define (maybe-extend verb-phrase)
+            (amb verb-phrase
+              (maybe-extend
+                (list verb-phrase (parse-prepositional-phrase)))))
+          (maybe-extend (parse-word verbs)))
+
+        (define result
+          (list (parse-noun-phrase) (parse-verb-phrase)))
+        (require (null? cursor))
+        result
+      )
+    '''
+    test_one(
+        shared_lib + \
+        '''
+        (parse-sentence '(the professor lectures to the student with the cat))
+        ''',
+        result = '(((the professor) ((lectures (to (the student))) (with (the cat)))) ((the professor) (lectures (to ((the student) (with (the cat)))))))'
+    )
+    test_one(
+        shared_lib + \
+        '''
+        (parse-sentence '(the professor lectures to the student with the))
+        ''',
+        result = '()'
+    )
+
+
 def test():
     test_non_amb()
     test_amb()
     test_logic_puzzle()
+    test_parsing_nlp()
 
 
 if __name__ == '__main__':
     install_rules()
+    '''have to increase recursion limit to avoid "maximum recursion depth exceeded" error'''
+    sys.setrecursionlimit(5000)
     test()
