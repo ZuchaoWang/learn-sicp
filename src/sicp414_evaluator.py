@@ -5,22 +5,21 @@ and only support a small proportion of the feautres
 no guarantee for performance, or even correctness (we have so few tests)
 
 the input of the language is a string, which will be transformed to tokens via Scanner
-then Parser transforms tokens to a scheme expression tree
-we do not stop parsing at list level, instead we further parse list into call, if, define_var
-the root of the resultant tree is a body expression, emcompassing all top level expressions
+then Parser transforms a list of tokens to several trees of tokens called token combos
+the combos are then parsed to expression tree, including symbol, call, if, define_var, ...
+the root of the resultant tree is a sequence expression, emcompassing all top level expressions
 finally this expression tree is evaluated directly
 
 we use simple class to represent token, expression, value
 token is so simple and not likely to change, so we use single class for it, and add stringify method directly as __str__
 expression and value are extensible, so we use more complex strategy
 we use different derived class for different types, to facilitate static type checking
-we implement operations (stringify, is_equal, quote, evaluate) as functions outside class
+we implement operations (stringify, is_equal, quote, evaluate) as functions outside class, because in-class methods are difficult to extend
 
 this functions are extensible by rules, and the rules are defined in global variable to defer configuration
-e.g. we can define eval_quote() based on quote_expr(), then update_quote_rules() later 
-  if we were to recreate the rules every time, we have to first define quote_expr() with rules, then define eval_quote() with quote_expr()
+e.g. we can define prim_equal() based on is_equal(), then update_is_equal_rules() later 
+  if we were to recreate the rules every time, we have to first define is_equal() with rules, then define prim_equal() with is_equal()
   each time we need to create a class instance or a closure
-
 '''
 
 import sys
@@ -140,15 +139,27 @@ class Token:
         self.lexeme = lexeme
         self.literal = literal
 
-    def __str__(self) -> str:
-        if self.tag == TokenTag.NUMBER:
-            return '%s:%s' % (self.tag.name, format_float(self.literal))
-        elif self.tag == TokenTag.STRING or self.tag == TokenTag.SYMBOL:
-            return '%s:%s' % (self.tag.name, self.literal)
-        elif self.tag == TokenTag.BOOLEAN:
-            return '%s:%s' % (self.tag.name, format_bool(self.literal))
-        else:
-            return self.tag.name
+
+def stringify_token(token: Token):
+    if token.tag == TokenTag.NUMBER:
+        return format_float(token.literal)
+    elif token.tag == TokenTag.STRING or token.tag == TokenTag.SYMBOL:
+        return token.literal
+    elif token.tag == TokenTag.BOOLEAN:
+        return format_bool(token.literal)
+    else:
+        return token.lexeme
+
+
+def stringify_token_full(token: Token):
+    if token.tag == TokenTag.NUMBER:
+        return '%s:%s' % (token.tag.name, format_float(token.literal))
+    elif token.tag == TokenTag.STRING or token.tag == TokenTag.SYMBOL:
+        return '%s:%s' % (token.tag.name, token.literal)
+    elif token.tag == TokenTag.BOOLEAN:
+        return '%s:%s' % (token.tag.name, format_bool(token.literal))
+    else:
+        return token.tag.name
 
 
 class SchemeScannerError(Exception):
@@ -294,9 +305,154 @@ def scan_source(source: str):
 
 
 '''
-expression and schemeval
-will specified as various classes, and this helps static type checking
-if we represent it as single class with different tag (like token), we won't have type checking with python's typing
+parse token from list to tree structure called combo, can be token, list or quote
+the result is a list of token combos
+'''
+
+
+class SchemeParserError(Exception):
+    def __init__(self, token: Token, message: str):
+        self.token = token
+        self.message = message
+
+    def __str__(self) -> str:
+        return 'parser error at %s in line %d: %s' % (stringify_token_full(self.token), self.token.line+1, self.message)
+
+
+class TokenCombo:
+    '''combo means combination'''
+    def __init__(self, anchor: Token):
+        self.anchor = anchor
+
+class TokenLiteral(TokenCombo):
+    def __init__(self, anchor: Token):
+        super().__init__(anchor)
+
+
+class TokenQuote(TokenCombo):
+    def __init__(self, anchor: Token, content: TokenCombo):
+        super().__init__(anchor)
+        self.content = content
+
+
+class TokenList(TokenCombo):
+    def __init__(self, anchor: Token, contents: List[TokenCombo]):
+        super().__init__(anchor)
+        self.contents = contents
+
+
+def stringify_token_combo(combo: TokenCombo):
+    if isinstance(combo, TokenLiteral):
+        return stringify_token(combo.anchor)
+    elif isinstance(combo, TokenQuote):
+        return '\'' + stringify_token_combo(combo.content)
+    else:
+        assert isinstance(combo, TokenList)
+        return '(%s)' % (' '.join([stringify_token_combo(subcombo) for subcombo in combo.contents]))
+
+
+TokenParserFuncType = Callable[[Token], TokenCombo]
+
+
+class TokenParser:
+    '''
+    the first phase of parsing: token list -> token trees
+    it extract tree structure from input token list, in a bottom-up manner
+    the result is a list of combos, which can be further parsed to expressions, or values, or ...
+
+    it's a very simple recursive descent, see how _parse_quote and _parse_left_paren call _parse_recursive
+    ref: https://craftinginterpreters.com/parsing-expressions.html
+
+    combo -> literal | quote | list;
+    literal -> SYMBOL | STRING | NUMBER
+    quote -> QUOTE combo;
+    list -> LEFT_PAREN ( combo )* RIGHT_PAREN;
+    '''
+
+    _rules: Dict[TokenTag, TokenParserFuncType]
+    _tokens: List[Token]
+    _current: int
+
+    def __init__(self):
+        self._rules = {
+            TokenTag.SYMBOL: self._parse_literal,
+            TokenTag.NUMBER: self._parse_literal,
+            TokenTag.STRING: self._parse_literal,
+            TokenTag.BOOLEAN: self._parse_literal,
+            TokenTag.QUOTE: self._parse_quote,
+            TokenTag.LEFT_PAREN: self._parse_left_paren,
+            TokenTag.RIGHT_PAREN: self._parse_right_paren
+        }
+        self._list_rules = {}
+        self._restart([])
+
+    def parse(self, tokens: List[Token]):
+        self._restart(tokens)
+        combos: List[TokenCombo] = []
+        try:
+            while not self._is_at_end():
+                combo = self._parse_recursive()
+                combos.append(combo)
+        except SchemeParserError as err:
+            scheme_panic(str(err))
+        return combos
+        
+    def _restart(self, tokens: List[Token]):
+        self.tokens = tokens
+        self.current = 0
+
+    def _parse_recursive(self) -> TokenCombo:
+        token = self._advance()
+        return self._rules[token.tag](token)
+
+    def _parse_literal(self, token: Token):
+        return TokenLiteral(token)
+
+    def _parse_quote(self, token: Token):
+        if self._is_at_end():
+            raise SchemeParserError(token, 'quote cannot be at the end')
+        if self._peek().tag == TokenTag.RIGHT_PAREN:
+            raise SchemeParserError(token, 'quote cannot be at list end')
+        content = self._parse_recursive()
+        return TokenQuote(token, content)
+
+    def _parse_left_paren(self, token: Token):
+        contents: List[TokenCombo] = []
+        while not self._is_at_end() and self._peek().tag != TokenTag.RIGHT_PAREN:
+            contents.append(self._parse_recursive())
+        if self._is_at_end() or self._peek().tag != TokenTag.RIGHT_PAREN:
+            raise SchemeParserError(token, 'list missing right parenthesis')
+        self._advance()  # consume right parenthesis
+        return TokenList(token, contents)
+
+    def _parse_right_paren(self, token: Token):
+        raise SchemeParserError(token, 'unmatched right parenthesis')
+
+    def _is_at_end(self):
+        return self.current >= len(self.tokens)
+
+    def _advance(self):
+        token = self.tokens[self.current]
+        self.current += 1
+        return token
+
+    def _peek(self):
+        return self.tokens[self.current]
+
+
+_token_parser = TokenParser()
+
+def parse_tokens(tokens: List[Token]):
+    combos = _token_parser.parse(tokens)
+    return combos
+
+
+'''
+the second phase of parsing turns token combos into expressions
+it build expression tree from top down, and the tree root is still the top level SequenceExpr
+
+notice expressions under quote should not be parsed in this phase, it remains as tokenCombo
+because when executed they will be turned into value, so no syntax is relevant
 '''
 
 
@@ -307,78 +463,55 @@ class Expression:
 '''GenericExpr seem to equivalent to Any, maybe later implementation will fix this'''
 GenericExpr = TypeVar('GenericExpr', bound=Expression)
 
+ParseExprFuncType = Callable[[TokenCombo], Expression]
 
-class SchemeVal:
-    '''
-    schemeVal defaults to be truthy, including 0, (), nil
-    the only thing not truthy is #f
-    we should declare this with vode below, but since object follows this rule, so no need to declare
+_parse_expr_rules: Dict[str, ParseExprFuncType] = {}
 
-    def __bool__(self) -> bool:
-        return True
-    '''
-    pass
+def update_parse_expr_rules(rules: Dict[str, ParseExprFuncType]):
+    _parse_expr_rules.update(rules)
 
-
-GenericVal = TypeVar('GenericVal', bound=SchemeVal)
-
-
-class SchemeEnvError(Exception):
-    def __init__(self, env: "Environment"):
-        self.env = env
-
-
-class Environment:
-    '''
-    see chap 4.1.3 and https://craftinginterpreters.com/statements-and-state.html
-
-    should not pass {} to __init__.bindings, because this {} will be shared among different instance
-    e.g. def __init__(self, bindings: Dict[str, SchemeVal]={}, enclosing: Optional["Environment"] = None):
-    see: https://stackoverflow.com/questions/26320899/why-is-the-empty-dictionary-a-dangerous-default-value-in-python
-    '''
-
-    def __init__(self, bindings: Dict[str, SchemeVal], enclosing: Optional["Environment"] = None):
-        self.bindings = bindings
-        self.enclosing = enclosing
-
-
-'''
-we use functional programming style, i.e. moving all methods out of class
-in this way, new operations can be easily added
-'''
-
-
-def _env_find(env: Environment, name: str):
-    cur: Optional[Environment] = env
-    while cur is not None:
-        if name in cur.bindings:
-            return cur
-        cur = cur.enclosing
-    return None
-
-
-def env_define(env: Environment, name: str, sv: SchemeVal):
-    env.bindings[name] = sv
-
-
-def env_set(env: Environment, name: str, sv: SchemeVal):
-    env = _env_find(env, name)
-    if env is None:
-        raise SchemeEnvError(env)
+def parse_expr_recursive(combo: TokenCombo) -> Expression:
+    if isinstance(combo, TokenList):
+        if len(combo.contents) == 0:
+            return _parse_expr_rules['#nil'](combo)
+        else:
+            head = combo.contents[0]
+            if isinstance(head, TokenLiteral):
+                if head.anchor.tag == TokenTag.SYMBOL:
+                    symbol_name = head.anchor.literal
+                    if symbol_name in _parse_expr_rules:
+                        return _parse_expr_rules[symbol_name](combo)
+                else:
+                    raise SchemeParserError(head.anchor, 'list cannot start with %s' % head.anchor.tag.name)
+            return _parse_expr_rules['#call'](combo)
+    elif isinstance(combo, TokenQuote):
+        return _parse_expr_rules['#quote'](combo)
     else:
-        env.bindings[name] = sv
+        assert isinstance(combo, TokenLiteral)
+        return _parse_expr_rules['#literal'](combo)
 
+class SequenceExpr(Expression):
+    '''
+    can be all top-level code, or a begin expression, or procedure body
+    keyword is either a ROOT token, or the begin keyword, or the LEFT_PAREN
+    
+    notice: procedure parameters is not SequenceExpr
+    '''
 
-def env_lookup(env: Environment, name: str):
-    env = _env_find(env, name)
-    if env is None:
-        raise SchemeEnvError(env)
-    else:
-        return env.bindings[name]
+    def __init__(self, keyword: Token, contents: List[Expression]):
+        self.keyword = keyword
+        self.contents = contents
 
-
-def env_extend(env: Environment, parameter: List[str], arguments: List[SchemeVal]):
-    return Environment(dict(zip(parameter, arguments)), env)
+def parse_expr(combos: List[TokenCombo]):
+    try:
+        expressions: List[Expression] = []
+        for combo in combos:
+            expr = parse_expr_recursive(combo)
+            expressions.append(expr)
+    except SchemeParserError as err:
+        scheme_panic(str(err))
+    root_token = Token(TokenTag.ROOT, 0, '', None)
+    return SequenceExpr(root_token, expressions)
 
 
 '''
@@ -425,200 +558,32 @@ class BooleanExpr(Expression):
         self.value = value
 
 
-class ListExpr(Expression):
-    def __init__(self, paren: Token, expressions: List[Expression]):
-        '''
-        this is used just temporarily, and will be converted to more meaningful expressions
-        no other expression will derive from it
-        '''
-        self.paren = paren
-        self.expressions = expressions
-
-
-class SequenceExpr(Expression):
-    '''
-    can be all top-level code, or a begin expression, or procedure body
-    keyword is either a ROOT token, or the begin keyword, or the LEFT_PAREN
-    
-    notice: procedure parameters is not SequenceExpr
-    '''
-
-    def __init__(self, keyword: Token, contents: List[Expression]):
-        self.keyword = keyword
-        self.contents = contents
+def parse_literal(combo: TokenLiteral):
+    anchor = combo.anchor
+    if anchor.tag == TokenTag.SYMBOL:
+        return SymbolExpr(anchor)
+    elif anchor.tag == TokenTag.STRING:
+        return StringExpr(anchor)
+    elif anchor.tag == TokenTag.NUMBER:
+        return NumberExpr(anchor)
+    else:
+        assert anchor.tag == TokenTag.BOOLEAN
+        return BooleanExpr(anchor)
 
 
 class QuoteExpr(Expression):
     '''
     keyword can be either single quote, or LEFT_PAREN, depending which syntax is used
+    content is token combo, only turning into value at runtime
     '''
 
-    def __init__(self, keyword: Token, content: Expression):
+    def __init__(self, keyword: Token, content: TokenCombo):
         self.keyword = keyword
         self.content = content
 
 
-class SchemeParserError(Exception):
-    def __init__(self, token: Token, message: str):
-        self.token = token
-        self.message = message
-
-    def __str__(self) -> str:
-        return 'parser error at %s in line %d: %s' % (str(self.token), self.token.line+1, self.message)
-
-
-TokenParserFuncType = Callable[[Token], Expression]
-
-
-class TokenParser:
-    '''
-    the first phase of parsing: tokens -> lists
-    it builds expression tree from bottom up, and the tree root is the top level SequenceExpr
-    it does not try to parse ListExpr to more meaningful expression, because that can only be done top-down
-
-    it's a very simple recursive descent, see how _parse_quote and _parse_left_paren call _parse_recursive
-    ref: https://craftinginterpreters.com/parsing-expressions.html
-
-    expression -> SYMBOL | STRING | NUMBER | quote | list;
-    quote -> QUOTE expression;
-    list -> LEFT_PAREN ( expression )* RIGHT_PAREN;
-    '''
-
-    _rules: Dict[TokenTag, TokenParserFuncType]
-    _tokens: List[Token]
-    _current: int
-
-    def __init__(self):
-        self._rules = {
-            TokenTag.SYMBOL: self._parse_symbol,
-            TokenTag.NUMBER: self._parse_number,
-            TokenTag.STRING: self._parse_string,
-            TokenTag.BOOLEAN: self._parse_boolean,
-            TokenTag.QUOTE: self._parse_quote,
-            TokenTag.LEFT_PAREN: self._parse_left_paren,
-            TokenTag.RIGHT_PAREN: self._parse_right_paren
-        }
-        self._list_rules = {}
-        self._restart([])
-
-    def parse(self, tokens: List[Token]):
-        self._restart(tokens)
-        expressions: List[Expression] = []
-        try:
-            while not self._is_at_end():
-                expr = self._parse_recursive()
-                expressions.append(expr)
-        except SchemeParserError as err:
-            scheme_panic(str(err))
-        root_token = Token(TokenTag.ROOT, 0, "", None)
-        return SequenceExpr(root_token, expressions)
-
-    def _restart(self, tokens: List[Token]):
-        self.tokens = tokens
-        self.current = 0
-
-    def _parse_recursive(self) -> Expression:
-        token = self._advance()
-        return self._rules[token.tag](token)
-
-    def _parse_symbol(self, token: Token):
-        return SymbolExpr(token)
-
-    def _parse_string(self, token: Token):
-        return StringExpr(token)
-
-    def _parse_number(self, token: Token):
-        return NumberExpr(token)
-
-    def _parse_boolean(self, token: Token):
-        return BooleanExpr(token)
-
-    def _parse_quote(self, token: Token):
-        if self._is_at_end():
-            raise SchemeParserError(token, 'quote cannot be at the end')
-        content = self._parse_recursive()
-        return QuoteExpr(token, content)
-
-    def _parse_left_paren(self, token: Token):
-        expressions: List[Expression] = []
-        while not self._is_at_end() and self._peek().tag != TokenTag.RIGHT_PAREN:
-            expressions.append(self._parse_recursive())
-        if self._is_at_end() or self._peek().tag != TokenTag.RIGHT_PAREN:
-            raise SchemeParserError(token, 'list missing right parenthesis')
-        self._advance()  # consume right parenthesis
-        return ListExpr(token, expressions)
-
-    def _parse_right_paren(self, token: Token):
-        raise SchemeParserError(token, 'unmatched right parenthesis')
-
-    def _is_at_end(self):
-        return self.current >= len(self.tokens)
-
-    def _advance(self):
-        token = self.tokens[self.current]
-        self.current += 1
-        return token
-
-    def _peek(self):
-        return self.tokens[self.current]
-
-
-_token_parser = TokenParser()
-
-def _parse_token_to_list(tokens: List[Token]):
-    return _token_parser.parse(tokens)
-
-'''
-the second phase of parsing turns lists -> if, define, lambda, call, ...
-it also turns many SymbolExpr into tokens
-it build expression tree from top down, and the tree root is still the top level SequenceExpr
-
-notice expressions under quote should not be parsed in this phase
-the ListExpr there should remain as ListExpr
-because when executed they will be turned into value, so no syntax is relevant
-'''
-
-ListParserFuncType = Callable[[ListExpr], Expression]
-
-_list_parser_rules: Dict[str, ListParserFuncType] = {}
-
-def update_parser_rules(rules: Dict[str, ListParserFuncType]):
-    _list_parser_rules.update(rules)
-
-def parse_list_recursive(expr: Expression) -> Expression:
-    if isinstance(expr, ListExpr): # rule based parsing
-        if len(expr.expressions) == 0:
-            return _list_parser_rules['#nil'](expr)
-        elif type(expr.expressions[0]) == SymbolExpr:
-            symbol_name = cast(SymbolExpr, expr.expressions[0]).name.literal
-            if symbol_name in _list_parser_rules:
-                return _list_parser_rules[symbol_name](expr)
-        return _list_parser_rules['#call'](expr)
-    elif isinstance(expr, SequenceExpr): # parse contents of SequenceExpr
-        contents = [parse_list_recursive(subexpr) for subexpr in expr.contents]
-        return SequenceExpr(expr.keyword, contents)
-    else: # pass through SymbolExpr, StringExpr, NumberExpr, BooleanExpr, QuoteExpr
-        return expr
-
-def _parse_list(expr: SequenceExpr):
-    try:
-        res = parse_list_recursive(expr)
-    except SchemeParserError as err:
-        scheme_panic(str(err))
-    return cast(SequenceExpr, res)
-
-def parse_tokens(tokens: List[Token]):
-    expr = _parse_token_to_list(tokens)
-    expr = _parse_list(expr)
-    return expr
-
-
-'''
-list parsing rules
-we extract information from list statically
-converting list into different kinds of expressions
-so no need to parse list at runtime, as in chap 4.1.2
-'''
+def parse_quote(combo: TokenQuote):
+    return QuoteExpr(combo.anchor, combo.content)
 
 
 class NilExpr(Expression):
@@ -626,8 +591,8 @@ class NilExpr(Expression):
         self.paren = paren
 
 
-def parse_nil(expr: ListExpr):
-    return NilExpr(expr.paren)
+def parse_list_nil(combo: TokenList):
+    return NilExpr(combo.anchor)
 
 
 class CallExpr(Expression):
@@ -637,20 +602,28 @@ class CallExpr(Expression):
         self.operands = operands
 
 
-def parse_call(expr: ListExpr):
-    if len(expr.expressions) == 0:
-        raise SchemeParserError(expr.paren, 'call should not be empty')
-    operator_expr = parse_list_recursive(expr.expressions[0])
-    operand_exprs = [parse_list_recursive(subexpr) for subexpr in expr.expressions[1:]]
-    return CallExpr(expr.paren, operator_expr, operand_exprs)
+def parse_list_call(combo: TokenList):
+    if len(combo.contents) == 0:
+        raise SchemeParserError(combo.anchor, 'call should not be empty')
+    operator_expr = parse_expr_recursive(combo.contents[0])
+    operand_exprs = [parse_expr_recursive(subcombo) for subcombo in combo.contents[1:]]
+    return CallExpr(combo.anchor, operator_expr, operand_exprs)
 
 
-def parse_quote(expr: ListExpr):
-    if len(expr.expressions) != 2:
-        raise SchemeParserError(expr.paren, 'quote should have 2 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).name
+def parse_sub_symbol_token(combo: TokenCombo, prefix: str):
+    if isinstance(combo, TokenLiteral):
+        anchor = cast(TokenLiteral, combo).anchor
+        if anchor.tag == TokenTag.SYMBOL:
+            return anchor
+    raise SchemeParserError(anchor, '%s should be symbol, now %s' % (prefix, anchor.tag.name))
+
+
+def parse_list_quote(combo: TokenList):
+    if len(combo.contents) != 2:
+        raise SchemeParserError(combo.anchor, 'quote should have 2 expressions, now %d' % len(combo.contents))
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
     # should not recursively parse expressions under QuoteExpr
-    return QuoteExpr(keyword, expr.expressions[1])
+    return QuoteExpr(keyword, combo.contents[1])
 
 
 class SetExpr(Expression):
@@ -658,15 +631,15 @@ class SetExpr(Expression):
         self.keyword = keyword
         self.name = name
         self.initializer = initializer
+        
 
-
-def parse_set(expr: ListExpr):
-    if len(expr.expressions) != 3:
+def parse_list_set(combo: TokenList):
+    if len(combo.contents) != 3:
         raise SchemeParserError(
-            expr.paren, 'set should have 3 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).name
-    name = cast(SymbolExpr, expr.expressions[1]).name
-    initializer = parse_list_recursive(expr.expressions[2])
+            combo.anchor, 'set should have 3 expressions, now %d' % len(combo.contents))
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
+    name = parse_sub_symbol_token(combo.contents[1], 'name')
+    initializer = parse_expr_recursive(combo.contents[2])
     return SetExpr(keyword, name, initializer)
 
 
@@ -696,45 +669,38 @@ def check_duplicate_parameters(parameters: List[Token]):
     return None
 
 
-def parse_parameters(paren: Token, expressions: List[Expression]):
-    if not all([isinstance(subexpr, SymbolExpr) for subexpr in expressions]):
-        raise SchemeParserError(paren, 'parameters should all be symbolic')
-    parameters = [cast(SymbolExpr, subexpr).name for subexpr in expressions]
+def parse_list_parameters(paren: Token, combos: List[TokenCombo]):
+    parameters = [parse_sub_symbol_token(subcombo, 'parameter') for subcombo in combos]
     para_dup = check_duplicate_parameters(parameters)
     if para_dup is not None:
         raise SchemeParserError(paren, 'parameters should be unique, now %s show up twice' % para_dup.literal)
     return parameters
 
 
-def parse_define(expr: ListExpr):
-    if len(expr.expressions) < 3:
+def parse_list_define(combo: TokenList):
+    if len(combo.contents) < 3:
         raise SchemeParserError(
-            expr.paren, 'define should have at least 3 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).name
-    expr1 = expr.expressions[1]
-    if isinstance(expr1, SymbolExpr):  # define variable
-        name = cast(SymbolExpr, expr1).name
-        if len(expr.expressions) != 3:
+            combo.anchor, 'define should have at least 3 expressions, now %d' % len(combo.contents))
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
+    subcombo1 = combo.contents[1]
+    if isinstance(subcombo1, TokenLiteral) and subcombo1.anchor.tag == TokenTag.SYMBOL:  # define variable
+        name = parse_sub_symbol_token(subcombo1, 'define variable name')
+        if len(combo.contents) != 3:
             raise SchemeParserError(
-                expr.paren, 'define variable should have 3 expressions, now %d' % len(expr.expressions))
-        initializer = parse_list_recursive(expr.expressions[2])
+                combo.anchor, 'define variable should have 3 expressions, now %d' % len(combo.contents))
+        initializer = parse_expr_recursive(combo.contents[2])
         return DefineVarExpr(keyword, name, initializer)
-    elif isinstance(expr1, ListExpr):  # define procedure
-        if len(expr1.expressions) == 0:
+    elif isinstance(subcombo1, TokenList):  # define procedure
+        if len(subcombo1.contents) == 0:
             raise SchemeParserError(
-                expr.paren, 'define procedure should provide name')
-        expr10 = expr1.expressions[0]
-        if isinstance(expr10, SymbolExpr):
-            name = cast(SymbolExpr, expr10).name
-            parameters = parse_parameters(expr.paren, expr1.expressions[1:])
-            body = SequenceExpr(expr.paren, [parse_list_recursive(subexpr) for subexpr in expr.expressions[2:]])
-            return DefineProcExpr(keyword, name, parameters, body)
-        else:
-            raise SchemeParserError(
-                expr.paren, 'define procedure should use symbolic name, now %s' % type(expr10).__name__)
+                combo.anchor, 'define procedure should provide name')
+        subcombo10 = subcombo1.contents[0]
+        name = parse_sub_symbol_token(subcombo10, 'define procedure name')
+        parameters = parse_list_parameters(combo.anchor, subcombo1.contents[1:])
+        body = SequenceExpr(combo.anchor, [parse_expr_recursive(subcombo) for subcombo in combo.contents[2:]])
+        return DefineProcExpr(keyword, name, parameters, body)
     else:
-        raise SchemeParserError(
-            expr.paren, 'define 2nd expression should be symbol or list, now %s' % type(expr1).__name__)
+        raise SchemeParserError(combo.anchor, 'define 2nd expression should be symbol or list')
 
 
 class IfExpr(Expression):
@@ -745,25 +711,25 @@ class IfExpr(Expression):
         self.else_branch = else_branch
 
 
-def parse_if(expr: ListExpr):
-    if len(expr.expressions) != 3 and len(expr.expressions) != 4:
+def parse_list_if(combo: TokenList):
+    if len(combo.contents) != 3 and len(combo.contents) != 4:
         raise SchemeParserError(
-            expr.paren, 'if should have 3 or 4 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).name
-    pred_expr = parse_list_recursive(expr.expressions[1])
-    then_expr = parse_list_recursive(expr.expressions[2])
+            combo.anchor, 'if should have 3 or 4 expressions, now %d' % len(combo.contents))
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
+    pred_expr = parse_expr_recursive(combo.contents[1])
+    then_expr = parse_expr_recursive(combo.contents[2])
     else_expr = None
-    if len(expr.expressions) == 4:
-        else_expr = parse_list_recursive(expr.expressions[3])
+    if len(combo.contents) == 4:
+        else_expr = parse_expr_recursive(combo.contents[3])
     return IfExpr(keyword, pred_expr, then_expr, else_expr)
 
 
-def parse_begin(expr: ListExpr):
-    if len(expr.expressions) < 2:
+def parse_list_begin(combo: TokenList):
+    if len(combo.contents) < 2:
         raise SchemeParserError(
-            expr.paren, 'begin should have at least 2 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).name
-    contents = [parse_list_recursive(subexpr) for subexpr in expr.expressions[1:]]
+            combo.anchor, 'begin should have at least 2 expressions, now %d' % len(combo.contents))
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
+    contents = [parse_expr_recursive(subcombo) for subcombo in combo.contents[1:]]
     return SequenceExpr(keyword, contents)
 
 
@@ -774,45 +740,44 @@ class LambdaExpr(Expression):
         self.body = body
 
 
-def parse_lambda(expr: ListExpr):
-    if len(expr.expressions) < 3:
+def parse_list_lambda(combo: TokenList):
+    if len(combo.contents) < 3:
         raise SchemeParserError(
-            expr.paren, 'lambda should have at least 3 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).name
-    expr1 = expr.expressions[1]
-    if isinstance(expr1, ListExpr):
-        parameters = parse_parameters(expr.paren, expr1.expressions)
-        body = SequenceExpr(expr.paren, [parse_list_recursive(subexpr) for subexpr in expr.expressions[2:]])
+            combo.anchor, 'lambda should have at least 3 expressions, now %d' % len(combo.contents))
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
+    subcombo1 = combo.contents[1]
+    if isinstance(subcombo1, TokenList):
+        parameters = parse_list_parameters(combo.anchor, subcombo1.contents)
+        body = SequenceExpr(combo.anchor, [parse_expr_recursive(subcombo) for subcombo in combo.contents[2:]])
         return LambdaExpr(keyword, parameters, body)
     else:
-        raise SchemeParserError(
-            expr.paren, 'lambda 2nd expression should be list, now %s' % type(expr1).__name__)
+        raise SchemeParserError(combo.anchor, 'lambda 2nd expression should be list')
 
 
-def parse_let(expr: ListExpr):
+def parse_list_let(combo: TokenList):
     '''
     desugar let to lambda and call
     call.paren = let.paren, lambda.keyword = let.keyword
     '''
-    if len(expr.expressions) < 3:
+    if len(combo.contents) < 3:
         raise SchemeParserError(
-            expr.paren, 'let should have at least 3 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).name
-    expr1 = expr.expressions[1]
-    if isinstance(expr1, ListExpr):
-        if not all([isinstance(subexpr, ListExpr) for subexpr in expr1.expressions]):
-            raise SchemeParserError(expr.paren, 'let 2nd expression should be list of list')
-        names_and_intializers = [cast(ListExpr, subexpr).expressions for subexpr in expr1.expressions]
-        if not all([len(expr_pair) == 2 for expr_pair in names_and_intializers]):
-            raise SchemeParserError(expr.paren, 'let 2nd expression should be list of list of 2 expressions')
-        parameters = parse_parameters(expr.paren, [expr_pair[0] for expr_pair in names_and_intializers])
-        body = SequenceExpr(expr.paren, [parse_list_recursive(subexpr) for subexpr in expr.expressions[2:]])
+            combo.anchor, 'let should have at least 3 expressions, now %d' % len(combo.contents))
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
+    subcombo1 = combo.contents[1]
+    if isinstance(subcombo1, TokenList):
+        if not all([isinstance(subcombo, TokenList) for subcombo in subcombo1.contents]):
+            raise SchemeParserError(combo.anchor, 'let 2nd expression should be list of list')
+        names_and_intializers = [cast(TokenList, subcombo).contents for subcombo in subcombo1.contents]
+        if not all([len(combo_pair) == 2 for combo_pair in names_and_intializers]):
+            raise SchemeParserError(combo.anchor, 'let 2nd expression should be list of list of 2 expressions')
+        parameters = parse_list_parameters(combo.anchor, [expr_pair[0] for expr_pair in names_and_intializers])
+        body = SequenceExpr(combo.anchor, [parse_expr_recursive(subcombo) for subcombo in combo.contents[2:]])
         operator = LambdaExpr(keyword, parameters, body)
-        operands = [parse_list_recursive(expr_pair[1]) for expr_pair in names_and_intializers]
-        return CallExpr(expr.paren, operator, operands)
+        operands = [parse_expr_recursive(combo_pair[1]) for combo_pair in names_and_intializers]
+        return CallExpr(combo.anchor, operator, operands)
     else:
         raise SchemeParserError(
-            expr.paren, 'let 2nd expression should be list, now %s' % type(expr1).__name__)
+            combo.anchor, 'let 2nd expression should be list, now %s' % type(subcombo1).__name__)
 
 
 class AndExpr(Expression):
@@ -821,12 +786,12 @@ class AndExpr(Expression):
         self.contents = contents
 
 
-def parse_and(expr: ListExpr):
-    if len(expr.expressions) < 3:
+def parse_list_and(combo: TokenList):
+    if len(combo.contents) < 3:
         raise SchemeParserError(
-            expr.paren, 'and should have at least 3 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).name
-    contents = [parse_list_recursive(subexpr) for subexpr in expr.expressions[1:]]
+            combo.anchor, 'and should have at least 3 expressions, now %d' % len(combo.contents))
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
+    contents = [parse_expr_recursive(subcombo) for subcombo in combo.contents[1:]]
     return AndExpr(keyword, contents)
 
 
@@ -836,12 +801,12 @@ class OrExpr(Expression):
         self.contents = contents
 
 
-def parse_or(expr: ListExpr):
-    if len(expr.expressions) < 3:
+def parse_list_or(combo: TokenList):
+    if len(combo.contents) < 3:
         raise SchemeParserError(
-            expr.paren, 'or should have at least 3 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).name
-    contents = [parse_list_recursive(subexpr) for subexpr in expr.expressions[1:]]
+            combo.anchor, 'or should have at least 3 expressions, now %d' % len(combo.contents))
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
+    contents = [parse_expr_recursive(subcombo) for subcombo in combo.contents[1:]]
     return OrExpr(keyword, contents)
 
 
@@ -851,36 +816,38 @@ class NotExpr(Expression):
         self.content = content
 
 
-def parse_not(expr: ListExpr):
-    if len(expr.expressions) != 2:
+def parse_list_not(combo: TokenList):
+    if len(combo.contents) != 2:
         raise SchemeParserError(
-            expr.paren, 'not should have 2 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).name
-    content = parse_list_recursive(expr.expressions[1])
+            combo.anchor, 'not should have 2 expressions, now %d' % len(combo.contents))
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
+    content = parse_expr_recursive(combo.contents[1])
     return NotExpr(keyword, content)
 
 
-def install_parser_rules():
+def install_parse_expr_rules():
     '''
     we use #nil instead of nil, #call instead of call
     because #nil and #call are both invalid tokens
     this forbids the syntax of (#nill blabla) and (#call blabla)
     '''
     rules = {
-        '#nil': parse_nil,
-        '#call': parse_call,
-        'quote': parse_quote,
-        'set!': parse_set,
-        'define': parse_define,
-        'if': parse_if,
-        'begin': parse_begin,
-        'lambda': parse_lambda,
-        'let': parse_let,
-        'and': parse_and,
-        'or': parse_or,
-        'not': parse_not
+        '#literal': parse_literal,
+        '#quote': parse_quote,
+        '#nil': parse_list_nil,
+        '#call': parse_list_call,
+        'quote': parse_list_quote,
+        'set!': parse_list_set,
+        'define': parse_list_define,
+        'if': parse_list_if,
+        'begin': parse_list_begin,
+        'lambda': parse_list_lambda,
+        'let': parse_list_let,
+        'and': parse_list_and,
+        'or': parse_list_or,
+        'not': parse_list_not
     }
-    update_parser_rules(rules)
+    update_parse_expr_rules(rules)
 
 
 '''expression stringifier'''
@@ -936,13 +903,6 @@ def stringify_expr_boolean(expr: BooleanExpr):
 
 
 @stringify_expr_rule_decorator
-def stringify_expr_list(expr: ListExpr):
-    substrs = [stringify_expr(subexpr) for subexpr in expr.expressions]
-    substrs = ['list', *substrs]
-    return '(%s)' % (' '.join(substrs))
-
-
-@stringify_expr_rule_decorator
 def stringify_expr_sequence(expr: SequenceExpr):
     substrs = [stringify_expr(subexpr) for subexpr in expr.contents]
     substrs = ['sequence', *substrs]
@@ -951,7 +911,7 @@ def stringify_expr_sequence(expr: SequenceExpr):
 
 @stringify_expr_rule_decorator
 def stringify_expr_quote(expr: QuoteExpr):
-    substrs = ['quote', stringify_expr(expr.content)]
+    substrs = ['quote', stringify_token_combo(expr.content)]
     return '(%s)' % (' '.join(substrs))
 
 
@@ -1028,7 +988,6 @@ def install_stringify_expr_rules():
         StringExpr: stringify_expr_string,
         NumberExpr: stringify_expr_number,
         BooleanExpr: stringify_expr_boolean,
-        ListExpr: stringify_expr_list,
         SequenceExpr: stringify_expr_sequence,
         QuoteExpr: stringify_expr_quote,
         NilExpr: stringify_expr_nil,
@@ -1043,6 +1002,85 @@ def install_stringify_expr_rules():
         NotExpr: stringify_expr_not
     }
     update_stringify_expr_rules(rules)
+
+
+'''
+schemeval will be specified as various classes, and this helps static type checking
+if we represent it as single class with different tag (like token), we won't have type checking with python's typing
+'''
+
+class SchemeVal:
+    '''
+    schemeVal defaults to be truthy, including 0, (), nil
+    the only thing not truthy is #f
+    we should declare this with vode below, but since object follows this rule, so no need to declare
+
+    def __bool__(self) -> bool:
+        return True
+    '''
+    pass
+
+
+GenericVal = TypeVar('GenericVal', bound=SchemeVal)
+
+
+class SchemeEnvError(Exception):
+    def __init__(self, env: "Environment"):
+        self.env = env
+
+
+class Environment:
+    '''
+    see chap 4.1.3 and https://craftinginterpreters.com/statements-and-state.html
+
+    should not pass {} to __init__.bindings, because this {} will be shared among different instance
+    e.g. def __init__(self, bindings: Dict[str, SchemeVal]={}, enclosing: Optional["Environment"] = None):
+    see: https://stackoverflow.com/questions/26320899/why-is-the-empty-dictionary-a-dangerous-default-value-in-python
+    '''
+
+    def __init__(self, bindings: Dict[str, SchemeVal], enclosing: Optional["Environment"] = None):
+        self.bindings = bindings
+        self.enclosing = enclosing
+
+
+'''
+we use functional programming style, i.e. moving all methods out of class
+in this way, new operations can be easily added
+'''
+
+
+def _env_find(env: Environment, name: str):
+    cur: Optional[Environment] = env
+    while cur is not None:
+        if name in cur.bindings:
+            return cur
+        cur = cur.enclosing
+    return None
+
+
+def env_define(env: Environment, name: str, sv: SchemeVal):
+    env.bindings[name] = sv
+
+
+def env_set(env: Environment, name: str, sv: SchemeVal):
+    env = _env_find(env, name)
+    if env is None:
+        raise SchemeEnvError(env)
+    else:
+        env.bindings[name] = sv
+
+
+def env_lookup(env: Environment, name: str):
+    env = _env_find(env, name)
+    if env is None:
+        raise SchemeEnvError(env)
+    else:
+        return env.bindings[name]
+
+
+def env_extend(env: Environment, parameter: List[str], arguments: List[SchemeVal]):
+    return Environment(dict(zip(parameter, arguments)), env)
+
 
 
 '''
@@ -1331,74 +1369,27 @@ def pair_length(sv: PairVal):
 
 
 '''
-quoter expression to value
+quoter token combo to value
 '''
 
-QuoteFuncType = Callable[[Expression], SchemeVal]
-
-_quote_rules: Dict[Type, QuoteFuncType] = {}
-
-
-def update_quote_rules(rules: Dict[Type, QuoteFuncType]):
-    _quote_rules.update(rules)
-
-
-def quote_expr(expr: Expression):
-    t = find_type(type(expr), _quote_rules)
-    f = _quote_rules[t]
-    return f(expr)
-
-
-QuoteRuleType = Union[
-    Callable[[], SchemeVal],
-    Callable[[GenericExpr], SchemeVal],
-]
-
-
-def quote_rule_decorator(rule_func: QuoteRuleType):
-    arity = len(inspect.getfullargspec(rule_func).args)
-
-    def _quote_rule_wrapped(expr: Expression):
-        args: List[Any] = [expr]
-        return rule_func(*args[0:arity])
-    return _quote_rule_wrapped
-
-
-@quote_rule_decorator
-def quote_symbol(expr: SymbolExpr):
-    return SymbolVal(expr.name.literal)
-
-
-@quote_rule_decorator
-def quote_string(expr: StringExpr):
-    return StringVal(expr.value.literal)
-
-
-@quote_rule_decorator
-def quote_number(expr: NumberExpr):
-    return NumberVal(expr.value.literal)
-
-
-@quote_rule_decorator
-def quote_boolean(expr: BooleanExpr):
-    return BooleanVal(expr.value.literal)
-
-
-@quote_rule_decorator
-def quote_list(expr: ListExpr):
-    subvals = [quote_expr(subexpr) for subexpr in expr.expressions]
-    return pair_from_list(subvals)
-
-
-def install_quote_rules():
-    rules = {
-        SymbolExpr: quote_symbol,
-        StringExpr: quote_string,
-        NumberExpr: quote_number,
-        BooleanExpr: quote_boolean,
-        ListExpr: quote_list,
-    }
-    update_quote_rules(rules)
+def quote_token_combo(combo: TokenCombo):
+    if isinstance(combo, TokenLiteral):
+        if combo.anchor.tag == TokenTag.SYMBOL:
+            return SymbolVal(combo.anchor.literal)
+        elif combo.anchor.tag == TokenTag.STRING:
+            return StringVal(combo.anchor.literal)
+        elif combo.anchor.tag == TokenTag.NUMBER:
+            return NumberVal(combo.anchor.literal)
+        else:
+            assert combo.anchor.tag == TokenTag.BOOLEAN
+            return BooleanVal(combo.anchor.literal)
+    elif isinstance(combo, TokenQuote):
+        subvals = [SymbolVal('quote'), quote_token_combo(combo.content)]
+        return pair_from_list(subvals)
+    else:
+        assert isinstance(combo, TokenList)
+        subvals = [quote_token_combo(subcomb) for subcomb in combo.contents]
+        return pair_from_list(subvals)
 
 
 '''evaluator'''
@@ -1415,7 +1406,7 @@ class SchemeRuntimeError(Exception):
         self.message = message
 
     def __str__(self) -> str:
-        return 'runtime error at %s in line %d: %s' % (str(self.token), self.token.line+1, self.message)
+        return 'runtime error at %s in line %d: %s' % (stringify_token_full(self.token), self.token.line+1, self.message)
 
 
 EvalRecurFuncType = Callable[[Expression, Environment], SchemeVal]
@@ -1517,7 +1508,7 @@ def eval_nil():
 
 @eval_rule_decorator
 def eval_quote(expr: QuoteExpr):
-    return quote_expr(expr.content)
+    return quote_token_combo(expr.content)
 
 
 def pure_check_prim_arity(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
@@ -1809,11 +1800,10 @@ def install_primitives():
 
 
 def install_rules():
-    install_parser_rules()
+    install_parse_expr_rules()
     install_stringify_expr_rules()
     install_stringify_value_rules()
     install_is_equal_rules()
-    install_quote_rules()
     install_eval_rules()
     install_primitives()
 
@@ -1831,13 +1821,14 @@ def test_one(source: str, **kargs: str):
     try:
         # scan
         tokens = scan_source(source)
-        token_str = ', '.join([str(t) for t in tokens])
+        token_str = ', '.join([stringify_token_full(t) for t in tokens])
         print('* tokens: %s' % token_str)
         if 'tokens' in kargs:
             assert token_str == kargs['tokens']
 
         # parse
-        expr = parse_tokens(tokens)
+        combos = parse_tokens(tokens)
+        expr = parse_expr(combos)
         expr_str = stringify_expr(expr)
         print('* expression: %s' % expr_str)
         if 'expression' in kargs:
@@ -1903,7 +1894,7 @@ def test_parse():
     test_one(
         '\'(a (b c))',
         tokens='QUOTE, LEFT_PAREN, SYMBOL:a, LEFT_PAREN, SYMBOL:b, SYMBOL:c, RIGHT_PAREN, RIGHT_PAREN',
-        expression='(sequence (quote (list a (list b c))))',
+        expression='(sequence (quote (a (b c))))',
         result='(a (b c))'
     )
     test_one(
@@ -1924,7 +1915,7 @@ def test_parse():
     # list parsing
     test_one(
         '(define ("a" "b") 3)',
-        panic='parser error at LEFT_PAREN in line 1: define procedure should use symbolic name, now StringExpr'
+        panic='parser error at STRING:a in line 1: define procedure name should be symbol, now STRING'
     )
     # define proc
     test_one(

@@ -30,33 +30,34 @@ we will not do that
 
 from typing import List, Optional
 from sicp414_evaluator import AndExpr, SequenceExpr, BooleanVal, CallExpr, Environment, EvalRecurFuncType, Expression, \
-    IfExpr, ListExpr, NilVal, NotExpr, OrExpr, PrimVal, ProcPlainVal, SchemePanic, SchemeParserError, SchemeRuntimeError, \
-    SchemeVal, SequenceExpr, Token, TokenTag, UndefVal, env_extend, install_is_equal_rules, install_parser_rules, install_primitives, install_quote_rules, install_stringify_expr_rules, \
-    install_stringify_value_rules, is_truthy, make_global_env, parse_list_recursive, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, \
-    scan_source, scheme_flush, stringify_expr, stringify_expr_rule_decorator, stringify_value, update_parser_rules, update_stringify_expr_rules
+    IfExpr, NilVal, NotExpr, OrExpr, PrimVal, ProcPlainVal, SchemePanic, SchemeParserError, SchemeRuntimeError, SchemeVal, SequenceExpr, \
+    Token, TokenList, TokenTag, UndefVal, env_extend, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, \
+    install_stringify_value_rules, is_truthy, make_global_env, parse_expr, parse_expr_recursive, parse_sub_symbol_token, parse_tokens, pure_eval_call_invalid, \
+    pure_eval_call_prim, scan_source, scheme_flush, stringify_expr, stringify_expr_rule_decorator, stringify_value, update_parse_expr_rules, update_stringify_expr_rules
 from sicp416_resolver import ResBindingsType, ResRecurFuncType, ResStackType, install_resolved_eval_rules, install_resolver_rules, resolve_expr, \
     resolved_eval_rule_decorator, resolved_eval_rule_decorator, resolved_evaluate_expr, resolver_rule_decorator, \
     update_resolved_eval_rules, update_resolver_rules
 
 
 class LazyExpr(Expression):
-    def __init__(self, paren: Token, content: Expression):
-        self.paren = paren
+    def __init__(self, keyword: Token, content: Expression):
+        self.keyword = keyword
         self.content = content
 
 
-def parse_lazy(expr: ListExpr):
+def parse_list_lazy(combo: TokenList):
     '''parse lazy from list expression'''
-    if len(expr.expressions) != 2:
+    if len(combo.contents) != 2:
         raise SchemeParserError(
-            expr.paren, 'lazy should have 2 expressions, now %d' % len(expr.expressions))
-    content = parse_list_recursive(expr.expressions[1])
-    return LazyExpr(expr.paren, content)
+            combo.anchor, 'lazy should have 2 expressions, now %d' % len(combo.contents))
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
+    content = parse_expr_recursive(combo.contents[1])
+    return LazyExpr(keyword, content)
 
 
-def install_parser_lazy_rules():
-    rules = {'lazy': parse_lazy}
-    update_parser_rules(rules)
+def install_parse_expr_lazy_rules():
+    rules = {'lazy': parse_list_lazy}
+    update_parse_expr_rules(rules)
 
 
 @stringify_expr_rule_decorator
@@ -209,16 +210,15 @@ def install_resolved_eval_lazy_rules():
 
 
 def install_rules():
-    install_parser_rules()
+    install_parse_expr_rules()
     install_stringify_expr_rules()
     install_stringify_value_rules()
     install_is_equal_rules()
-    install_quote_rules()
     install_resolver_rules()
     install_resolved_eval_rules()
     install_primitives()
     # lazy rules
-    install_parser_lazy_rules()
+    install_parse_expr_lazy_rules()
     install_stringify_expr_lazy_rules()
     install_resolver_lazy_rules()
     install_resolved_eval_lazy_rules()
@@ -239,7 +239,8 @@ def test_one(source: str, **kargs: str):
         tokens = scan_source(source)
 
         # parse
-        expr = parse_tokens(tokens)
+        combos = parse_tokens(tokens)
+        expr = parse_expr(combos)
 
         # resolve
         distances = resolve_expr(expr)

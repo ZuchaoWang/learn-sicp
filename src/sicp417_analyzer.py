@@ -16,10 +16,10 @@ from sicp414_evaluator import AndExpr, SequenceExpr, BooleanExpr, BooleanVal, Ca
     Environment, Expression, GenericExpr, IfExpr, LambdaExpr, NilExpr, NilVal, NotExpr, NumberExpr, NumberVal, OrExpr, \
     PrimVal, ProcVal, QuoteExpr, SchemePanic, SchemeRuntimeError, SchemeVal, SequenceExpr, SetExpr, SymbolVal, UndefVal, \
     StringExpr, StringVal, SymbolExpr, Token, env_define, env_extend, find_type, \
-    install_is_equal_rules, install_parser_rules, install_primitives, install_quote_rules, \
+    install_is_equal_rules, install_parse_expr_rules, install_primitives, \
     install_stringify_expr_rules, install_stringify_value_rules, is_truthy, \
-    make_global_env, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_define_var, \
-    quote_expr, scan_source, scheme_flush, scheme_panic, stringify_value
+    make_global_env, parse_expr, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_define_var, quote_token_combo, \
+    scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value
 from sicp416_resolver import ResDistancesType, install_resolver_rules, pure_resolved_eval_set, pure_resolved_eval_symbol, resolve_expr
 
 
@@ -29,7 +29,7 @@ class SchemeAnalysisError(Exception):
         self.message = message
 
     def __str__(self):
-        return 'analysis error at %s in line %d: %s' % (str(self.token), self.token.line+1, self.message)
+        return 'analysis error at %s in line %d: %s' % (stringify_token_full(self.token), self.token.line+1, self.message)
 
 
 EvaluableType = Callable[[Environment], SchemeVal]
@@ -127,7 +127,7 @@ def analyze_sequence(expr: SequenceExpr, analyze: AnalRecurFuncType):
 
 @analyzer_rule_decorator
 def analyze_quote(expr: QuoteExpr):
-    return lambda env: quote_expr(expr.content)
+    return lambda env: quote_token_combo(expr.content)
 
 
 class ProcAnalyzedVal(ProcVal):
@@ -174,7 +174,8 @@ def analyze_set(expr: SetExpr, analyze: AnalRecurFuncType, distances: ResDistanc
 
 
 def pure_eval_define_proc_analyzed(name: Token, parameters: List[Token], body_evl: EvaluableType, env: Environment):
-    proc_obj = ProcAnalyzedVal(name.literal, [p.literal for p in parameters], body_evl, env)
+    proc_obj = ProcAnalyzedVal(
+        name.literal, [p.literal for p in parameters], body_evl, env)
     env_define(env, name.literal, proc_obj)
     return SymbolVal(name.literal)
 
@@ -284,11 +285,10 @@ def install_analyzer_rules():
 
 
 def install_rules():
-    install_parser_rules()
+    install_parse_expr_rules()
     install_stringify_expr_rules()
     install_stringify_value_rules()
     install_is_equal_rules()
-    install_quote_rules()
     install_resolver_rules()
     install_analyzer_rules()
     install_primitives()
@@ -309,7 +309,8 @@ def test_one(source: str, **kargs: str):
         tokens = scan_source(source)
 
         # parse
-        expr = parse_tokens(tokens)
+        combos = parse_tokens(tokens)
+        expr = parse_expr(combos)
 
         # resolve
         distances = resolve_expr(expr)

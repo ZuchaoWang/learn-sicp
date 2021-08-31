@@ -1,51 +1,52 @@
 import sys
 import inspect
-from typing import Any, Callable, Dict, List, Optional, Type, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Type, Union
 from sicp331_cycle_detect import LinkedListNode
 from sicp414_evaluator import AndExpr, BooleanExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, \
-    Environment, Expression, GenericExpr, IfExpr, LambdaExpr, ListExpr, NilExpr, NotExpr, NumberExpr, OrExpr, \
+    Environment, Expression, GenericExpr, IfExpr, LambdaExpr, NilExpr, NotExpr, NumberExpr, OrExpr, \
     PairVal, PrimVal, ProcPlainVal, QuoteExpr, SchemePanic, SchemeParserError, SchemeRuntimeError, \
-    SchemeVal, SequenceExpr, SetExpr, StringExpr, SymbolExpr, Token, UndefVal, env_extend, find_type, \
-    install_is_equal_rules, install_parser_rules, install_primitives, install_quote_rules, install_stringify_expr_rules, \
-    install_stringify_value_rules, is_truthy, make_global_env, pair_from_list, parse_list_recursive, parse_tokens, pure_check_proc_arity, \
-    pure_eval_boolean, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_define_proc_plain, pure_eval_define_var, pure_eval_nil, \
-    pure_eval_number, pure_eval_string, quote_expr, scan_source, scheme_flush, scheme_panic, stringify_expr, stringify_expr_rule_decorator, \
-    stringify_value, update_parser_rules, update_stringify_expr_rules
+    SchemeVal, SequenceExpr, SetExpr, StringExpr, SymbolExpr, Token, TokenList, UndefVal, env_extend, find_type, \
+    install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, \
+    install_stringify_value_rules, is_truthy, make_global_env, pair_from_list, parse_expr, parse_expr_recursive, parse_sub_symbol_token, parse_tokens, \
+    pure_check_proc_arity, pure_eval_boolean, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_define_proc_plain, pure_eval_define_var, \
+    pure_eval_nil, pure_eval_number, pure_eval_string, quote_token_combo, scan_source, scheme_flush, scheme_panic, stringify_expr, \
+    stringify_expr_rule_decorator, stringify_value, update_parse_expr_rules, update_stringify_expr_rules
 from sicp416_resolver import ResDistancesType, ResRecurFuncType, env_lookup_at, env_set_at, install_resolver_rules, pure_resolved_eval_set, \
     pure_resolved_eval_symbol, resolve_expr, resolver_rule_decorator, update_resolver_rules
 
 
-class AmbExpr(ListExpr):
+class AmbExpr(Expression):
     def __init__(self, keyword: Token, contents: List[Expression]):
         self.keyword = keyword
         self.contents = contents
 
 
-def parse_amb(expr: ListExpr):
+def parse_list_amb(combo: TokenList):
     '''parse amb from list expression'''
-    keyword = cast(SymbolExpr, expr.expressions[0]).name
-    contents = [parse_list_recursive(subexpr) for subexpr in expr.expressions[1:]]
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
+    contents = [parse_expr_recursive(subexpr)
+                for subexpr in combo.contents[1:]]
     return AmbExpr(keyword, contents)
 
 
-def parse_require(expr: ListExpr):
+def parse_list_require(combo: TokenList):
     '''
     parse require from list expression
     (require pred) is then desugared to (if not(pred) (amb))
     '''
-    if len(expr.expressions) != 2:
+    if len(combo.contents) != 2:
         raise SchemeParserError(
-            expr.paren, 'require should have 2 expressions, now %d' % len(expr.expressions))
-    keyword = cast(SymbolExpr, expr.expressions[0]).name
-    return IfExpr(keyword, NotExpr(keyword, parse_list_recursive(expr.expressions[1])), AmbExpr(keyword, []), None)
+            combo.anchor, 'require should have 2 expressions, now %d' % len(combo.contents))
+    keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
+    return IfExpr(keyword, NotExpr(keyword, parse_expr_recursive(combo.contents[1])), AmbExpr(keyword, []), None)
 
 
-def install_parser_amb_rules():
+def install_parse_expr_amb_rules():
     rules = {
-        'amb': parse_amb,
-        'require': parse_require
+        'amb': parse_list_amb,
+        'require': parse_list_require
     }
-    update_parser_rules(rules)
+    update_parse_expr_rules(rules)
 
 
 @stringify_expr_rule_decorator
@@ -144,7 +145,7 @@ def amb_evaluate_expr(expr: SequenceExpr, env: Environment, distances: ResDistan
             fake a failure to let it retry
             although this failure is specified at root level
             it is executed at the deepest level
-            
+
             exception does not bubble up environment chain
             instead it bubbles up call stack frames
             '''
@@ -267,7 +268,7 @@ def amb_eval_nil(expr: NilExpr, env: Environment, succeed: AmbEvalSuceedFuncType
 
 @amb_eval_rule_decorator
 def amb_eval_quote(expr: QuoteExpr, env: Environment, succeed: AmbEvalSuceedFuncType):
-    succeed(quote_expr(expr.content))
+    succeed(quote_token_combo(expr.content))
 
 
 @amb_eval_rule_decorator
@@ -367,13 +368,13 @@ def amb_eval_amb(expr: AmbExpr, env: Environment, succeed: AmbEvalSuceedFuncType
 
     def _try_next(i: int):
         if i == n:
-            raise AmbEvalFailure() # in case of candidate exhaustion
+            raise AmbEvalFailure()  # in case of candidate exhaustion
         else:
             def _succeed_at(result: SchemeVal):
                 try:
                     succeed(result)
                 except AmbEvalFailure:
-                    _try_next(i+1) # in case of failure afterwards
+                    _try_next(i+1)  # in case of failure afterwards
             amb_eval(expr.contents[i], env, _succeed_at)
 
     _try_next(0)
@@ -403,15 +404,14 @@ def install_amb_eval_rules():
 
 
 def install_rules():
-    install_parser_rules()
+    install_parse_expr_rules()
     install_stringify_expr_rules()
     install_stringify_value_rules()
     install_is_equal_rules()
-    install_quote_rules()
     install_resolver_rules()
     install_primitives()
     # amb rules
-    install_parser_amb_rules()
+    install_parse_expr_amb_rules()
     install_stringify_expr_amb_rules()
     install_resolver_amb_rules()
     install_amb_eval_rules()
@@ -435,7 +435,8 @@ def test_one(source: str, **kargs: str):
         tokens = scan_source(source)
 
         # parse
-        expr = parse_tokens(tokens)
+        combos = parse_tokens(tokens)
+        expr = parse_expr(combos)
 
         # resolve
         distances = resolve_expr(expr)
@@ -607,18 +608,18 @@ def test_parsing_nlp():
       )
     '''
     test_one(
-        shared_lib + \
+        shared_lib +
         '''
         (parse-sentence '(the professor lectures to the student with the cat))
         ''',
-        result = '(((the professor) ((lectures (to (the student))) (with (the cat)))) ((the professor) (lectures (to ((the student) (with (the cat)))))))'
+        result='(((the professor) ((lectures (to (the student))) (with (the cat)))) ((the professor) (lectures (to ((the student) (with (the cat)))))))'
     )
     test_one(
-        shared_lib + \
+        shared_lib +
         '''
         (parse-sentence '(the professor lectures to the student with the))
         ''',
-        result = '()'
+        result='()'
     )
 
 

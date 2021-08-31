@@ -36,12 +36,13 @@ from typing import Any, Callable, Dict, List, Type, Union, cast
 # but can use absolute import below
 
 from sicp414_evaluator import AndExpr, SequenceExpr, BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, \
-    EvalRecurFuncType, Expression, GenericExpr, IfExpr, LambdaExpr, ListExpr, NilExpr, NotExpr, NumberExpr, OrExpr, QuoteExpr, \
+    EvalRecurFuncType, Expression, GenericExpr, IfExpr, LambdaExpr, NilExpr, NotExpr, NumberExpr, OrExpr, QuoteExpr, \
     SchemeEnvError, SchemePanic, SchemeRuntimeError, SchemeVal, SetExpr, StringExpr, SymbolExpr, Token, \
     eval_and, eval_boolean, eval_call, eval_sequence, eval_define_proc, eval_define_var, eval_if, \
     eval_lambda, eval_nil, eval_not, eval_number, eval_or, eval_quote, eval_string, find_type, \
-    install_is_equal_rules, install_parser_rules, install_primitives, install_quote_rules, install_stringify_expr_rules, \
-    install_stringify_value_rules, make_global_env, parse_tokens, scan_source, scheme_flush, scheme_panic, stringify_value
+    install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, \
+    install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, scan_source, scheme_flush, scheme_panic, \
+    stringify_token_full, stringify_value
 
 
 class SchemeResError(Exception):
@@ -50,7 +51,7 @@ class SchemeResError(Exception):
         self.message = message
 
     def __str__(self):
-        return 'resolution error at %s in line %d: %s' % (str(self.token), self.token.line+1, self.message)
+        return 'resolution error at %s in line %d: %s' % (stringify_token_full(self.token), self.token.line+1, self.message)
 
 
 ResStackType = List[Expression]
@@ -352,7 +353,7 @@ ResolvedEvalRuleType = Union[
 def resolved_eval_rule_decorator(rule_func: ResolvedEvalRuleType):
     arity = len(inspect.getfullargspec(rule_func).args)
 
-    def _resolved_eval_list_rule_wrapped(expr: ListExpr, env: Environment, evl: EvalRecurFuncType, distances: ResDistancesType):
+    def _resolved_eval_list_rule_wrapped(expr: Expression, env: Environment, evl: EvalRecurFuncType, distances: ResDistancesType):
         args: List[Any] = [expr, env, evl, distances]
         return rule_func(*args[0:arity])
     return _resolved_eval_list_rule_wrapped
@@ -430,11 +431,10 @@ def install_resolved_eval_rules():
 
 
 def install_rules():
-    install_parser_rules()
+    install_parse_expr_rules()
     install_stringify_expr_rules()
     install_stringify_value_rules()
     install_is_equal_rules()
-    install_quote_rules()
     install_resolver_rules()
     install_resolved_eval_rules()
     install_primitives()
@@ -455,7 +455,8 @@ def test_one(source: str, **kargs: str):
         tokens = scan_source(source)
 
         # parse
-        expr = parse_tokens(tokens)
+        combos = parse_tokens(tokens)
+        expr = parse_expr(combos)
 
         # resolve
         distances = resolve_expr(expr)
