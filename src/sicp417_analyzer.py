@@ -10,15 +10,14 @@ so I do not recommend this step
 
 
 import inspect
-from typing import Any, Callable, Dict, List, Type, Union
+from typing import Any, Callable, Dict, List, Optional, Type, Union
 
 from sicp414_evaluator import AndExpr, SequenceExpr, BooleanExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, \
     Environment, Expression, GenericExpr, IfExpr, LambdaExpr, NilExpr, NilVal, NotExpr, NumberExpr, NumberVal, OrExpr, \
     PrimVal, ProcVal, QuoteExpr, SchemePanic, SchemeRuntimeError, SchemeVal, SequenceExpr, SetExpr, SymbolVal, UndefVal, \
-    StringExpr, StringVal, SymbolExpr, Token, env_define, env_extend, find_type, \
-    install_is_equal_rules, install_parse_expr_rules, install_primitives, \
-    install_stringify_expr_rules, install_stringify_value_rules, is_truthy, \
-    make_global_env, parse_expr, parse_tokens, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_define_var, quote_token_combo, \
+    StringExpr, StringVal, SymbolExpr, Token, env_define, find_type, install_is_equal_rules, install_parse_expr_rules, install_primitives, \
+    install_stringify_expr_rules, install_stringify_value_rules, is_truthy, make_global_env, parse_expr, parse_tokens, pure_check_proc_arity, \
+    pure_eval_call_invalid, pure_eval_call_prim, pure_eval_call_proc_extend_env, pure_eval_define_var, quote_token_combo, \
     scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value
 from sicp416_resolver import ResDistancesType, install_resolver_rules, pure_resolved_eval_set, pure_resolved_eval_symbol, resolve_expr
 
@@ -133,16 +132,14 @@ def analyze_quote(expr: QuoteExpr):
 class ProcAnalyzedVal(ProcVal):
     '''procedure body is a EvaluableType'''
 
-    def __init__(self, name: str, parameters: List[str], body: EvaluableType, env: Environment):
-        super().__init__(name, parameters, env)
+    def __init__(self, name: str, pos_paras: List[str], rest_para: Optional[str], body: EvaluableType, env: Environment):
+        super().__init__(name, pos_paras, rest_para, env)
         self.body = body
 
 
 def pure_eval_call_proc_analyzed(expr: CallExpr, operator: ProcAnalyzedVal, operands: List[SchemeVal]):
-    if len(operator.parameters) != len(operands):
-        raise SchemeRuntimeError(expr.paren, '%s expect %d arguments, get %d' % (
-            operator.name, len(operator.parameters), len(operands)))
-    new_env = env_extend(operator.env, operator.parameters, operands)
+    pure_check_proc_arity(expr, operator, operands)
+    new_env = pure_eval_call_proc_extend_env(operator, operands)
     return operator.body(new_env)
 
 
@@ -173,13 +170,6 @@ def analyze_set(expr: SetExpr, analyze: AnalRecurFuncType, distances: ResDistanc
     return _evaluate
 
 
-def pure_eval_define_proc_analyzed(name: Token, parameters: List[Token], body_evl: EvaluableType, env: Environment):
-    proc_obj = ProcAnalyzedVal(
-        name.literal, [p.literal for p in parameters], body_evl, env)
-    env_define(env, name.literal, proc_obj)
-    return SymbolVal(name.literal)
-
-
 @analyzer_rule_decorator
 def analyze_define_var(expr: DefineVarExpr, analyze: AnalRecurFuncType):
     initializer_evl = analyze(expr.initializer)
@@ -195,7 +185,9 @@ def analyze_define_proc(expr: DefineProcExpr, analyze: AnalRecurFuncType):
     body_evl = analyze(expr.body)
 
     def _evaluate(env: Environment):
-        return pure_eval_define_proc_analyzed(expr.name, expr.parameters, body_evl, env)
+        proc_obj = ProcAnalyzedVal(expr.name.literal, [p.literal for p in expr.pos_paras], expr.rest_para.literal if expr.rest_para is not None else None, body_evl, env)
+        env_define(env, expr.name.literal, proc_obj)
+        return SymbolVal(expr.name.literal)
     return _evaluate
 
 
@@ -222,7 +214,7 @@ def analyze_lambda(expr: LambdaExpr, analyze: AnalRecurFuncType):
     body_evl = analyze(expr.body)
 
     def _evaluate(env: Environment):
-        return ProcAnalyzedVal('lambda', [p.literal for p in expr.parameters], body_evl, env)
+        return ProcAnalyzedVal('lambda', [p.literal for p in expr.pos_paras], expr.rest_para.literal if expr.rest_para is not None else None, body_evl, env)
     return _evaluate
 
 

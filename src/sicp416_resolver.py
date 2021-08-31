@@ -225,7 +225,10 @@ def resolve_define_proc_value(expr: Union[DefineProcExpr, LambdaExpr], phase: bo
         bindings[expr] = {}
     # resolve parameters
     local_scope = bindings[expr]
-    for p in expr.parameters:
+    for p in expr.pos_paras:
+        local_scope[p.literal] = phase
+    if expr.rest_para is not None:
+        p = expr.rest_para
         local_scope[p.literal] = phase
     # resolve body recursively
     resolve(expr.body, phase)

@@ -32,8 +32,8 @@ from typing import List, Optional
 from sicp414_evaluator import AndExpr, SequenceExpr, BooleanVal, CallExpr, Environment, EvalRecurFuncType, Expression, \
     IfExpr, NilVal, NotExpr, OrExpr, PrimVal, ProcPlainVal, SchemePanic, SchemeParserError, SchemeRuntimeError, SchemeVal, SequenceExpr, \
     Token, TokenList, TokenTag, UndefVal, env_extend, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, \
-    install_stringify_value_rules, is_truthy, make_global_env, parse_expr, parse_expr_recursive, parse_sub_symbol_token, parse_tokens, pure_eval_call_invalid, \
-    pure_eval_call_prim, scan_source, scheme_flush, stringify_expr, stringify_expr_rule_decorator, stringify_value, update_parse_expr_rules, update_stringify_expr_rules
+    install_stringify_value_rules, is_truthy, make_global_env, parse_expr, parse_expr_recursive, parse_sub_symbol_token, parse_tokens, pure_check_proc_arity, pure_eval_call_invalid, \
+    pure_eval_call_prim, pure_eval_call_proc_extend_env, scan_source, scheme_flush, stringify_expr, stringify_expr_rule_decorator, stringify_value, update_parse_expr_rules, update_stringify_expr_rules
 from sicp416_resolver import ResBindingsType, ResRecurFuncType, ResStackType, install_resolved_eval_rules, install_resolver_rules, resolve_expr, \
     resolved_eval_rule_decorator, resolved_eval_rule_decorator, resolved_evaluate_expr, resolver_rule_decorator, \
     update_resolved_eval_rules, update_resolver_rules
@@ -131,10 +131,8 @@ def lazy_resolved_eval_sequence(expr: SequenceExpr, env: Environment, evl: EvalR
 
 
 def pure_lazy_resolved_eval_call_proc_plain(expr: CallExpr, operator: ProcPlainVal, operands: List[SchemeVal], evl: EvalRecurFuncType):
-    if len(operator.parameters) != len(operands):
-        raise SchemeRuntimeError(expr.paren, '%s expect %d arguments, get %d' % (
-            operator.name, len(operator.parameters), len(operands)))
-    new_env = env_extend(operator.env, operator.parameters, operands)
+    pure_check_proc_arity(expr, operator, operands)
+    new_env = pure_eval_call_proc_extend_env(operator, operands)
     # only change
     return evl(operator.body, new_env)
 

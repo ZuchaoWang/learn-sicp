@@ -5,12 +5,12 @@ from sicp331_cycle_detect import LinkedListNode
 from sicp414_evaluator import AndExpr, BooleanExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, \
     Environment, Expression, GenericExpr, IfExpr, LambdaExpr, NilExpr, NotExpr, NumberExpr, OrExpr, \
     PairVal, PrimVal, ProcPlainVal, QuoteExpr, SchemePanic, SchemeParserError, SchemeRuntimeError, \
-    SchemeVal, SequenceExpr, SetExpr, StringExpr, SymbolExpr, Token, TokenList, UndefVal, env_extend, find_type, \
+    SchemeVal, SequenceExpr, SetExpr, StringExpr, SymbolExpr, Token, TokenList, UndefVal, find_type, \
     install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, \
     install_stringify_value_rules, is_truthy, make_global_env, pair_from_list, parse_expr, parse_expr_recursive, parse_sub_symbol_token, parse_tokens, \
-    pure_check_proc_arity, pure_eval_boolean, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_define_proc_plain, pure_eval_define_var, \
-    pure_eval_nil, pure_eval_number, pure_eval_string, quote_token_combo, scan_source, scheme_flush, scheme_panic, stringify_expr, \
-    stringify_expr_rule_decorator, stringify_value, update_parse_expr_rules, update_stringify_expr_rules
+    pure_check_proc_arity, pure_eval_boolean, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_call_proc_extend_env, pure_eval_define_proc_plain, \
+    pure_eval_define_var, pure_eval_lambda_plain, pure_eval_nil, pure_eval_number, pure_eval_string, quote_token_combo, scan_source, scheme_flush, \
+    scheme_panic, stringify_expr, stringify_expr_rule_decorator, stringify_value, update_parse_expr_rules, update_stringify_expr_rules
 from sicp416_resolver import ResDistancesType, ResRecurFuncType, env_lookup_at, env_set_at, install_resolver_rules, pure_resolved_eval_set, \
     pure_resolved_eval_symbol, resolve_expr, resolver_rule_decorator, update_resolver_rules
 
@@ -280,8 +280,7 @@ def amb_eval_call(expr: CallExpr, env: Environment, succeed: AmbEvalSuceedFuncTy
                 succeed(pure_eval_call_prim(expr, operator, operands))
             elif isinstance(operator, ProcPlainVal):
                 pure_check_proc_arity(expr, operator, operands)
-                new_env = env_extend(
-                    operator.env, operator.parameters, operands)
+                new_env = pure_eval_call_proc_extend_env(operator, operands)
                 amb_eval(operator.body, new_env, succeed)
             else:
                 succeed(pure_eval_call_invalid(expr, operator))
@@ -316,8 +315,7 @@ def amb_eval_define_var(expr: DefineVarExpr, env: Environment, succeed: AmbEvalS
 
 @amb_eval_rule_decorator
 def amb_eval_define_proc(expr: DefineProcExpr, env: Environment, succeed: AmbEvalSuceedFuncType):
-    succeed(pure_eval_define_proc_plain(
-        expr.name, expr.parameters, expr.body, env))
+    succeed(pure_eval_define_proc_plain(expr, env))
 
 
 @amb_eval_rule_decorator
@@ -334,9 +332,7 @@ def amb_eval_if(expr: IfExpr, env: Environment, succeed: AmbEvalSuceedFuncType, 
 
 @amb_eval_rule_decorator
 def amb_eval_lambda(expr: LambdaExpr, env: Environment, succeed: AmbEvalSuceedFuncType):
-    res = ProcPlainVal(
-        'lambda', [p.literal for p in expr.parameters], expr.body, env)
-    succeed(res)
+    succeed(pure_eval_lambda_plain(expr, env))
 
 
 @amb_eval_rule_decorator

@@ -118,6 +118,7 @@ class TokenTag(enum.Enum):
     LEFT_PAREN = enum.auto()
     RIGHT_PAREN = enum.auto()
     QUOTE = enum.auto()
+    DOT = enum.auto()
     SYMBOL = enum.auto()
     STRING = enum.auto()
     NUMBER = enum.auto()
@@ -211,6 +212,8 @@ class Scanner:
             self._add_token(TokenTag.RIGHT_PAREN)
         elif c == '\'':
             self._scan_quote()
+        elif c == '.':
+            self._scan_dot()
         elif c == '"':
             self._scan_string()
         elif c == '\n':
@@ -240,6 +243,14 @@ class Scanner:
             self._error('quote should not be followed by space')
         else:
             self._add_token(TokenTag.QUOTE, 'quote')
+
+    def _scan_dot(self):
+        if self._is_at_end():
+            self._error('dot should not be at the end')
+        elif not self._peek().isspace():
+            self._error('dot should be followed by space')
+        else:
+            self._add_token(TokenTag.DOT)
 
     def _scan_string(self):
         while not self._is_at_end() and self._peek() != '"':
@@ -379,6 +390,7 @@ class TokenParser:
             TokenTag.NUMBER: self._parse_literal,
             TokenTag.STRING: self._parse_literal,
             TokenTag.BOOLEAN: self._parse_literal,
+            TokenTag.DOT: self._parse_literal,
             TokenTag.QUOTE: self._parse_quote,
             TokenTag.LEFT_PAREN: self._parse_left_paren,
             TokenTag.RIGHT_PAREN: self._parse_right_paren
@@ -423,6 +435,7 @@ class TokenParser:
         if self._is_at_end() or self._peek().tag != TokenTag.RIGHT_PAREN:
             raise SchemeParserError(token, 'list missing right parenthesis')
         self._advance()  # consume right parenthesis
+        self._check_dots(contents)
         return TokenList(token, contents)
 
     def _parse_right_paren(self, token: Token):
@@ -438,6 +451,16 @@ class TokenParser:
 
     def _peek(self):
         return self.tokens[self.current]
+
+    def _check_dots(self, combos: List[TokenCombo]):
+        '''one list can have at most one dot, if exist the dot should be at position -2'''
+        dot_indices = [index for (index, subcombo) in enumerate(combos) if subcombo.anchor.tag == TokenTag.DOT]
+        dot_num = len(dot_indices)
+        if dot_num > 1:
+            raise SchemeParserError(combos[dot_indices[-1]].anchor, 'one list can have at most one dot, now %d' % dot_num)
+        elif dot_num == 1 and dot_indices[-1] != len(combos)-2:
+            raise SchemeParserError(combos[dot_indices[-1]].anchor, 'dot should be at -2 position of list')
+
 
 
 _token_parser = TokenParser()
@@ -558,17 +581,20 @@ class BooleanExpr(Expression):
         self.value = value
 
 
+_parse_expr_literal_rules: Dict[TokenTag, Callable[[Token], Expression]] = {
+    TokenTag.SYMBOL: lambda token: SymbolExpr(token),
+    TokenTag.STRING: lambda token: StringExpr(token),
+    TokenTag.NUMBER: lambda token: NumberExpr(token),
+    TokenTag.BOOLEAN: lambda token: BooleanExpr(token),
+}
+
 def parse_literal(combo: TokenLiteral):
     anchor = combo.anchor
-    if anchor.tag == TokenTag.SYMBOL:
-        return SymbolExpr(anchor)
-    elif anchor.tag == TokenTag.STRING:
-        return StringExpr(anchor)
-    elif anchor.tag == TokenTag.NUMBER:
-        return NumberExpr(anchor)
+    if anchor.tag in _parse_expr_literal_rules:
+        f = _parse_expr_literal_rules[anchor.tag]
+        return f(anchor)
     else:
-        assert anchor.tag == TokenTag.BOOLEAN
-        return BooleanExpr(anchor)
+        raise SchemeParserError(anchor, 'unexpected token type')
 
 
 class QuoteExpr(Expression):
@@ -582,7 +608,21 @@ class QuoteExpr(Expression):
         self.content = content
 
 
+def parse_check_dot_in_quote(combo: TokenCombo):
+    if isinstance(combo, TokenLiteral):
+        if combo.anchor.tag == TokenTag.DOT:
+            raise SchemeParserError(combo.anchor, 'cannot have free or header dot within quote')
+    elif isinstance(combo, TokenQuote):
+        parse_check_dot_in_quote(combo.content)
+    else:
+        assert isinstance(combo, TokenList)
+        for (i, subcombo) in enumerate(combo.contents):
+            if i == 0 or not isinstance(subcombo, TokenLiteral):
+                parse_check_dot_in_quote(subcombo)
+
+
 def parse_quote(combo: TokenQuote):
+    parse_check_dot_in_quote(combo.content)
     return QuoteExpr(combo.anchor, combo.content)
 
 
@@ -622,7 +662,8 @@ def parse_list_quote(combo: TokenList):
     if len(combo.contents) != 2:
         raise SchemeParserError(combo.anchor, 'quote should have 2 expressions, now %d' % len(combo.contents))
     keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
-    # should not recursively parse expressions under QuoteExpr
+    # should not recursively parse expressions under QuoteExpr, but should check it
+    parse_check_dot_in_quote(combo.contents[1])
     return QuoteExpr(keyword, combo.contents[1])
 
 
@@ -651,10 +692,11 @@ class DefineVarExpr(Expression):
 
 
 class DefineProcExpr(Expression):
-    def __init__(self, keyword: Token, name: Token, parameters: List[Token], body: SequenceExpr):
+    def __init__(self, keyword: Token, name: Token, pos_paras: List[Token], rest_para: Optional[Token], body: SequenceExpr):
         self.keyword = keyword
         self.name = name
-        self.parameters = parameters
+        self.pos_paras = pos_paras
+        self.rest_para = rest_para
         self.body = body
 
 
@@ -669,12 +711,17 @@ def check_duplicate_parameters(parameters: List[Token]):
     return None
 
 
-def parse_list_parameters(combos: List[TokenCombo]):
-    parameters = [parse_sub_symbol_token(subcombo, 'parameter') for subcombo in combos]
-    para_dup = check_duplicate_parameters(parameters)
+def parse_parameters(combos: List[TokenCombo]):
+    pos_combos = combos
+    rest_para = None
+    if len(combos) >= 2 and combos[-2].anchor.tag == TokenTag.DOT:
+        pos_combos = combos[:-2]
+        rest_para = parse_sub_symbol_token(combos[-1], 'rest parameter')
+    pos_paras = [parse_sub_symbol_token(subcombo, 'positional parameter') for subcombo in pos_combos]
+    para_dup = check_duplicate_parameters(pos_paras if rest_para is None else [*pos_paras, rest_para])
     if para_dup is not None:
         raise SchemeParserError(para_dup, 'parameter show up twice')
-    return parameters
+    return pos_paras, rest_para
 
 
 def parse_list_define(combo: TokenList):
@@ -696,9 +743,9 @@ def parse_list_define(combo: TokenList):
                 combo.anchor, 'define procedure should provide name')
         subcombo10 = subcombo1.contents[0]
         name = parse_sub_symbol_token(subcombo10, 'define procedure name')
-        parameters = parse_list_parameters(subcombo1.contents[1:])
+        pos_paras, rest_para = parse_parameters(subcombo1.contents[1:])
         body = SequenceExpr(combo.anchor, [parse_expr_recursive(subcombo) for subcombo in combo.contents[2:]])
-        return DefineProcExpr(keyword, name, parameters, body)
+        return DefineProcExpr(keyword, name, pos_paras, rest_para, body)
     else:
         raise SchemeParserError(combo.anchor, 'define 2nd expression should be symbol or list')
 
@@ -734,9 +781,10 @@ def parse_list_begin(combo: TokenList):
 
 
 class LambdaExpr(Expression):
-    def __init__(self, keyword: Token, parameters: List[Token], body: SequenceExpr):
+    def __init__(self, keyword: Token, pos_paras: List[Token], rest_para: Optional[Token], body: SequenceExpr):
         self.keyword = keyword
-        self.parameters = parameters
+        self.pos_paras = pos_paras
+        self.rest_para = rest_para
         self.body = body
 
 
@@ -747,9 +795,9 @@ def parse_list_lambda(combo: TokenList):
     keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
     subcombo1 = combo.contents[1]
     if isinstance(subcombo1, TokenList):
-        parameters = parse_list_parameters(subcombo1.contents)
+        pos_paras, rest_para = parse_parameters(subcombo1.contents)
         body = SequenceExpr(combo.anchor, [parse_expr_recursive(subcombo) for subcombo in combo.contents[2:]])
-        return LambdaExpr(keyword, parameters, body)
+        return LambdaExpr(keyword, pos_paras, rest_para, body)
     else:
         raise SchemeParserError(combo.anchor, 'lambda 2nd expression should be list')
 
@@ -770,9 +818,9 @@ def parse_list_let(combo: TokenList):
         names_and_intializers = [cast(TokenList, subcombo).contents for subcombo in subcombo1.contents]
         if not all([len(combo_pair) == 2 for combo_pair in names_and_intializers]):
             raise SchemeParserError(combo.anchor, 'let 2nd expression should be list of list of 2 expressions')
-        parameters = parse_list_parameters([expr_pair[0] for expr_pair in names_and_intializers])
+        pos_paras, rest_para = parse_parameters([expr_pair[0] for expr_pair in names_and_intializers])
         body = SequenceExpr(combo.anchor, [parse_expr_recursive(subcombo) for subcombo in combo.contents[2:]])
-        operator = LambdaExpr(keyword, parameters, body)
+        operator = LambdaExpr(keyword, pos_paras, rest_para, body)
         operands = [parse_expr_recursive(combo_pair[1]) for combo_pair in names_and_intializers]
         return CallExpr(combo.anchor, operator, operands)
     else:
@@ -923,8 +971,8 @@ def stringify_expr_nil(expr: NilExpr):
 @stringify_expr_rule_decorator
 def stringify_expr_call(expr: CallExpr):
     operator_substr = stringify_expr(expr.operator)
-    operands_substr = [stringify_expr(subexpr) for subexpr in expr.operands]
-    substrs = ['call', operator_substr, *operands_substr]
+    operands_substrs = [stringify_expr(subexpr) for subexpr in expr.operands]
+    substrs = ['call', operator_substr, *operands_substrs]
     return '(%s)' % (' '.join(substrs))
 
 
@@ -942,8 +990,10 @@ def stringify_expr_define_var(expr: DefineVarExpr):
 
 @stringify_expr_rule_decorator
 def stringify_expr_define_proc(expr: DefineProcExpr):
-    para_substr = '(%s)' % (' '.join([token.literal for token in expr.parameters]))
-    substrs = ['define-proc', expr.name.literal, para_substr, stringify_expr(expr.body)]
+    para_substrs = [token.literal for token in expr.pos_paras]
+    if expr.rest_para is not None:
+        para_substrs = [*para_substrs, '.', expr.rest_para.literal]
+    substrs = ['define-proc', expr.name.literal, '(%s)' % (' '.join(para_substrs)), stringify_expr(expr.body)]
     return '(%s)' % (' '.join(substrs))
 
 
@@ -957,8 +1007,10 @@ def stringify_expr_if(expr: IfExpr):
 
 @stringify_expr_rule_decorator
 def stringify_expr_lambda(expr: LambdaExpr):
-    para_substr = '(%s)' % (' '.join([token.literal for token in expr.parameters]))
-    substrs = ['lambda', para_substr, stringify_expr(expr.body)]
+    para_substrs = [token.literal for token in expr.pos_paras]
+    if expr.rest_para is not None:
+        para_substrs = [*para_substrs, '.', expr.rest_para.literal]
+    substrs = ['lambda', '(%s)' % (' '.join(para_substrs)), stringify_expr(expr.body)]
     return '(%s)' % (' '.join(substrs))
 
 
@@ -1135,17 +1187,18 @@ class PairVal(SchemeVal):
 
 
 class PrimVal(SchemeVal):
-    def __init__(self, name: str, arity: Optional[int], body: Callable[..., SchemeVal]):
-        '''arity is None if any number of parameters are acceptable, such as list'''
+    def __init__(self, name: str, pos_arity: int, has_rest: bool, body: Callable[..., SchemeVal]):
         self.name = name
-        self.arity = arity
+        self.pos_arity = pos_arity
+        self.has_rest = has_rest
         self.body = body
 
 
 class ProcVal(SchemeVal):
-    def __init__(self, name: str, parameters: List[str], env: Environment):
+    def __init__(self, name: str, pos_paras: List[str], rest_para: Optional[str], env: Environment):
         self.name = name
-        self.parameters = parameters
+        self.pos_paras = pos_paras
+        self.rest_para = rest_para
         self.env = env
 
 
@@ -1159,8 +1212,8 @@ class ProcPlainVal(ProcVal):
     handling both types here is chaotic
     '''
 
-    def __init__(self, name: str, parameters: List[str], body: SequenceExpr, env: Environment):
-        super().__init__(name, parameters, env)
+    def __init__(self, name: str, pos_paras: List[str], rest_para: Optional[str], body: SequenceExpr, env: Environment):
+        super().__init__(name, pos_paras, rest_para, env)
         self.body = body
 
 
@@ -1368,28 +1421,43 @@ def pair_length(sv: PairVal):
     return count
 
 
+def pair_last(sv: PairVal):
+    head: PairVal = sv
+    while isinstance(head.right, PairVal):
+        head = head.right
+    return head
+
+
 '''
 quoter token combo to value
 '''
 
+_quote_token_combo_literal_rules: Dict[TokenTag, Callable[[Token], SchemeVal]] = {
+    TokenTag.SYMBOL: lambda token: SymbolVal(token.literal),
+    TokenTag.STRING: lambda token: StringVal(token.literal),
+    TokenTag.NUMBER: lambda token: NumberVal(token.literal),
+    TokenTag.BOOLEAN: lambda token: BooleanVal(token.literal),
+}
+
 def quote_token_combo(combo: TokenCombo):
     if isinstance(combo, TokenLiteral):
-        if combo.anchor.tag == TokenTag.SYMBOL:
-            return SymbolVal(combo.anchor.literal)
-        elif combo.anchor.tag == TokenTag.STRING:
-            return StringVal(combo.anchor.literal)
-        elif combo.anchor.tag == TokenTag.NUMBER:
-            return NumberVal(combo.anchor.literal)
-        else:
-            assert combo.anchor.tag == TokenTag.BOOLEAN
-            return BooleanVal(combo.anchor.literal)
+        assert combo.anchor.tag in _quote_token_combo_literal_rules
+        f = _quote_token_combo_literal_rules[combo.anchor.tag]
+        return f(combo.anchor)
     elif isinstance(combo, TokenQuote):
         subvals = [SymbolVal('quote'), quote_token_combo(combo.content)]
         return pair_from_list(subvals)
     else:
         assert isinstance(combo, TokenList)
-        subvals = [quote_token_combo(subcomb) for subcomb in combo.contents]
-        return pair_from_list(subvals)
+        if len(combo.contents) >= 2 and combo.contents[-2].anchor.tag == TokenTag.DOT:
+            subvals = [quote_token_combo(subcomb) for subcomb in combo.contents[:-2]]
+            head_pair = pair_from_list(subvals)
+            tail_pair = pair_last(head_pair)
+            tail_pair.right = quote_token_combo(combo.contents[-1])
+            return head_pair
+        else:
+            subvals = [quote_token_combo(subcomb) for subcomb in combo.contents]
+            return pair_from_list(subvals)
 
 
 '''evaluator'''
@@ -1511,10 +1579,17 @@ def eval_quote(expr: QuoteExpr):
     return quote_token_combo(expr.content)
 
 
+def pure_check_arity(expr: CallExpr, name: str, pos_arity: int, has_rest: bool, arg_count: int):
+    if has_rest:
+        if arg_count < pos_arity:
+            raise SchemeRuntimeError(expr.paren, '%s expect at least %d arguments, only get %d' % (name, pos_arity, arg_count))
+    else:
+        if arg_count != pos_arity:
+            raise SchemeRuntimeError(expr.paren, '%s expect exactly %d arguments, but get %d' % (name, pos_arity, arg_count))
+
+
 def pure_check_prim_arity(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
-    if (operator.arity is not None) and (operator.arity != len(operands)):
-        raise SchemeRuntimeError(expr.paren, '%s expect %d arguments, get %d' % (
-            operator.name, operator.arity, len(operands)))
+    pure_check_arity(expr, operator.name, operator.pos_arity, operator.has_rest, len(operands))
 
 
 def pure_eval_call_prim(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
@@ -1525,15 +1600,23 @@ def pure_eval_call_prim(expr: CallExpr, operator: PrimVal, operands: List[Scheme
         raise SchemeRuntimeError(expr.paren, err.message)
 
 
-def pure_check_proc_arity(expr: CallExpr, operator: ProcPlainVal, operands: List[SchemeVal]):
-    if len(operator.parameters) != len(operands):
-        raise SchemeRuntimeError(expr.paren, '%s expect %d arguments, get %d' % (
-            operator.name, len(operator.parameters), len(operands)))
+def pure_check_proc_arity(expr: CallExpr, operator: ProcVal, operands: List[SchemeVal]):
+    pure_check_arity(expr, operator.name, len(operator.pos_paras), operator.rest_para is not None, len(operands))
+
+
+def pure_eval_call_proc_extend_env(operator: ProcVal, operands: List[SchemeVal]):
+    if operator.rest_para is None:
+        parameters = operator.pos_paras
+        arguments = operands
+    else:
+        parameters = [*operator.pos_paras, operator.rest_para]
+        arguments = [*operands[:len(operator.pos_paras)], pair_from_list(operands[len(operator.pos_paras):])]
+    return env_extend(operator.env, parameters, arguments)
 
 
 def pure_eval_call_proc_plain(expr: CallExpr, operator: ProcPlainVal, operands: List[SchemeVal], evl: EvalRecurFuncType):
     pure_check_proc_arity(expr, operator, operands)
-    new_env = env_extend(operator.env, operator.parameters, operands)
+    new_env = pure_eval_call_proc_extend_env(operator, operands)
     return evl(operator.body, new_env)
 
 
@@ -1574,10 +1657,10 @@ def pure_eval_define_var(name: Token, initializer: SchemeVal, env: Environment):
     return SymbolVal(name.literal)
 
 
-def pure_eval_define_proc_plain(name: Token, para_exprs: List[Token], body_exprs: SequenceExpr, env: Environment):
-    proc_obj = ProcPlainVal(name.literal, [p.literal for p in para_exprs], body_exprs, env)
-    env_define(env, name.literal, proc_obj)
-    return SymbolVal(name.literal)
+def pure_eval_define_proc_plain(expr: DefineProcExpr, env: Environment):
+    proc_obj = ProcPlainVal(expr.name.literal, [p.literal for p in expr.pos_paras], expr.rest_para.literal if expr.rest_para is not None else None, expr.body, env)
+    env_define(env, expr.name.literal, proc_obj)
+    return SymbolVal(expr.name.literal)
 
 
 @eval_rule_decorator
@@ -1590,7 +1673,7 @@ def eval_define_var(expr: DefineVarExpr, env: Environment, evl: EvalRecurFuncTyp
 @eval_rule_decorator
 def eval_define_proc(expr: DefineProcExpr, env: Environment):
     '''return the symbol defined'''
-    return pure_eval_define_proc_plain(expr.name, expr.parameters, expr.body, env)
+    return pure_eval_define_proc_plain(expr, env)
 
 
 @eval_rule_decorator
@@ -1605,10 +1688,14 @@ def eval_if(expr: IfExpr, env: Environment, evl: EvalRecurFuncType):
         return UndefVal()
 
 
+def pure_eval_lambda_plain(expr: LambdaExpr, env: Environment):
+    return ProcPlainVal('lambda', [p.literal for p in expr.pos_paras], expr.rest_para.literal if expr.rest_para is not None else None, expr.body, env)
+
+
 @eval_rule_decorator
 def eval_lambda(expr: LambdaExpr, env: Environment):
     '''return the procedure itself'''
-    return ProcPlainVal('lambda', [p.literal for p in expr.parameters], expr.body, env)
+    return pure_eval_lambda_plain(expr, env)
 
 
 @eval_rule_decorator
@@ -1677,19 +1764,15 @@ def make_global_env():
 
 def get_py_func_arity(py_func: Callable):
     rf = inspect.getfullargspec(py_func)
-    if rf.varargs: # in case of f(*args)
-        assert len(rf.args) == 0
-        return None
-    else: # in case of f() or f(x)
-        return len(rf.args)
+    return len(rf.args), rf.varargs is not None
 
 
 def register_primitives(env: Environment, primitives: Dict[str, Callable]):
     '''add a batch of primitives to environment'''
     for name in primitives:
         py_func = primitives[name]
-        arity = get_py_func_arity(py_func)
-        primitive = PrimVal(name, arity, py_func)
+        pos_arity, has_rest = get_py_func_arity(py_func)
+        primitive = PrimVal(name, pos_arity, has_rest, py_func)
         env_define(env, name, primitive)
 
 
@@ -1870,6 +1953,14 @@ def test_scan():
         '\' (1 2)',
         panic='scanner error in line 1: quote should not be followed by space'
     )
+    test_one(
+        '\'(1 . 2)',
+        tokens='QUOTE, LEFT_PAREN, NUMBER:1, DOT, NUMBER:2, RIGHT_PAREN'
+    )
+    test_one(
+        '\'(1 .2)',
+        panic='scanner error in line 1: dot should be followed by space'
+    )
 
 
 def test_parse():
@@ -1938,6 +2029,37 @@ def test_parse():
     test_one(
         '(let ((x 1) (y 2 3)) (+ x y))',
         panic='parser error at LEFT_PAREN in line 1: let 2nd expression should be list of list of 2 expressions'
+    )
+    # dot
+    test_one(
+        '\'(a . b . c)',
+        panic='parser error at DOT in line 1: one list can have at most one dot, now 2'
+    )
+    # dot
+    test_one(
+        '\'(a . )',
+        panic='parser error at DOT in line 1: dot should be at -2 position of list'
+    )
+    # dot
+    test_one(
+        '\'(. a)',
+        panic='parser error at DOT in line 1: cannot have free or header dot within quote'
+    )
+    # dot
+    test_one(
+        '(. a)',
+        panic='parser error at DOT in line 1: list cannot start with DOT'
+    )
+    # dot
+    test_one(
+        '(a . b)',
+        panic='parser error at DOT in line 1: unexpected token type'
+    )
+    # dot in parameter
+    test_one(
+        '(define (f a . b) b)',
+        expression='(sequence (define-proc f (a . b) (sequence b)))',
+        result='f'
     )
 
 
@@ -2082,6 +2204,30 @@ def test_eval():
         (f)
         ''',
         result='1'
+    )
+    # dot procedure
+    test_one(
+        '''
+        (define (f . a) a)
+        (f 1 2 3)
+        ''',
+        result='(1 2 3)'
+    )
+    # dot procedure
+    test_one(
+        '''
+        (define (f a b . c) c)
+        (f 1)
+        ''',
+        panic='runtime error at LEFT_PAREN in line 2: f expect at least 2 arguments, only get 1'
+    )
+    # dot in quote
+    test_one(
+        '''
+        (define x '(a b . c))
+        (cdr x)
+        ''',
+        result='(b . c)'
     )
 
 
