@@ -3,7 +3,7 @@
 # and define operations on power series
 
 from typing import Callable, Tuple
-from sicp352_prime_number import Stream
+from sicp352_prime_number import InfStream
 
 
 def almost_equal(x: float, y: float):
@@ -13,7 +13,7 @@ def almost_equal(x: float, y: float):
     return ok1 or ok2
 
 
-def ps_stringify(s: Stream, n: int) -> str:
+def ps_stringify(s: InfStream, n: int) -> str:
     if n < 2:
         n = 2
     # get topn coefficients
@@ -48,63 +48,63 @@ def ps_stringify(s: Stream, n: int) -> str:
         return res
 
 
-def ps_mult(s1: Stream, s2: Stream) -> Stream:
+def ps_mult(s1: InfStream, s2: InfStream) -> InfStream:
     # pattern: (k+1)-th item does not depend on previous items
-    def calc_mult(n: int) -> Stream:
+    def calc_mult(n: int) -> InfStream:
         coeffs1 = s1.topn_values(n+1)
         coeffs2 = s2.topn_values(n+1)
         sum = 0
         for i in range(n+1):
             sum += coeffs1[i] * coeffs2[n-i]
-        return Stream(sum, lambda: calc_mult(n+1))
+        return InfStream(sum, lambda: calc_mult(n+1))
 
     return calc_mult(0)
 
 
-def ps_reciprocal(s: Stream) -> Stream:
+def ps_reciprocal(s: InfStream) -> InfStream:
     head = s.value()
     assert head != 0
     self_normalized = s.scale(1/head)
-    rp = Stream(1, lambda: ps_mult(self_normalized.next().scale(-1), rp))
+    rp = InfStream(1, lambda: ps_mult(self_normalized.next().scale(-1), rp))
     return rp.scale(1/head)
 
 
-def ps_square(s: Stream) -> Stream:
+def ps_square(s: InfStream) -> InfStream:
     return ps_mult(s, s)
 
 
-def ps_div(s1: Stream, s2: Stream) -> Stream:
+def ps_div(s1: InfStream, s2: InfStream) -> InfStream:
     return ps_mult(s1, ps_reciprocal(s2))
 
 
-def make_sin_cos() -> Tuple[Stream, Stream]:
-    integers_rp = Stream.make_integers().next().reciprocal()
-    sin = Stream(0, lambda: Stream.mult(cos, integers_rp))
-    cos = Stream(1, lambda: Stream.mult(sin, integers_rp).scale(-1))
+def make_sin_cos() -> Tuple[InfStream, InfStream]:
+    integers_rp = InfStream.make_integers().next().reciprocal()
+    sin = InfStream(0, lambda: InfStream.mult(cos, integers_rp))
+    cos = InfStream(1, lambda: InfStream.mult(sin, integers_rp).scale(-1))
     return sin, cos
 
 
-def make_factorial() -> Stream:
-    integers_from_one = Stream.make_integers().next()
+def make_factorial() -> InfStream:
+    integers_from_one = InfStream.make_integers().next()
     # pattern: when (k+1)-th item only depends on k-th value
-    factorial = Stream(1, lambda: Stream.mult(factorial, integers_from_one))
+    factorial = InfStream(1, lambda: InfStream.mult(factorial, integers_from_one))
     return factorial
 
 
-def make_exponential(a: int) -> Stream:
-    twos = Stream.make_ones().scale(a)
-    exponential = Stream(1, lambda: Stream.mult(exponential, twos))
+def make_exponential(a: int) -> InfStream:
+    twos = InfStream.make_ones().scale(a)
+    exponential = InfStream(1, lambda: InfStream.mult(exponential, twos))
     return exponential
 
 
-def make_bernoulli() -> Stream:
+def make_bernoulli() -> InfStream:
     factorial = make_factorial()
 
     def combination(n: int, k: int) -> int:
         return factorial.nth_value(n)//(factorial.nth_value(k) * factorial.nth_value(n-k))
 
     # pattern: when (k+1)-th item only depends on all 1-st ~ k-th value
-    bernoulli = Stream(1, lambda: calc_bernoulli(1))
+    bernoulli = InfStream(1, lambda: calc_bernoulli(1))
 
     def calc_bernoulli(n: int):
         '''bernoulli number recursive definition:
@@ -113,12 +113,12 @@ def make_bernoulli() -> Stream:
         for k in range(n):
             sum += combination(n, k) * bernoulli.nth_value(k) / (n+1-k)
         sum = -sum
-        return Stream(sum, lambda: calc_bernoulli(n+1))
+        return InfStream(sum, lambda: calc_bernoulli(n+1))
 
     return bernoulli
 
 
-def coeff_sin(i: int, factorial: Stream) -> float:
+def coeff_sin(i: int, factorial: InfStream) -> float:
     if i % 2 == 0:
         return 0
     else:
@@ -129,7 +129,7 @@ def coeff_sin(i: int, factorial: Stream) -> float:
             return -c
 
 
-def coeff_cos(i: int, factorial: Stream) -> float:
+def coeff_cos(i: int, factorial: InfStream) -> float:
     if i % 2 == 0:
         c = 1/factorial.nth_value(i)
         if i % 4 == 0:
@@ -147,7 +147,7 @@ def coeff_one(i: int) -> float:
         return 0
 
 
-def coeff_tan(i: int, factorial: Stream, bernoulli: Stream, exponential2: Stream) -> float:
+def coeff_tan(i: int, factorial: InfStream, bernoulli: InfStream, exponential2: InfStream) -> float:
     '''tanganet formula:
     https://proofwiki.org/wiki/Power_Series_Expansion_for_Tangent_Function'''
     if i == 0:
@@ -163,7 +163,7 @@ def coeff_tan(i: int, factorial: Stream, bernoulli: Stream, exponential2: Stream
             return -c
 
 
-def test_one(name: str, s: Stream, n_coeff: int, coeff_func: Callable[[int], float]):
+def test_one(name: str, s: InfStream, n_coeff: int, coeff_func: Callable[[int], float]):
     p_str = ps_stringify(s, n_coeff)
     print('%s(x) = %s' % (name, p_str))
     for i in range(n_coeff):
@@ -178,7 +178,7 @@ def test_one(name: str, s: Stream, n_coeff: int, coeff_func: Callable[[int], flo
 def test():
     # calculate
     ps_sin, ps_cos = make_sin_cos()
-    ps_one = Stream.add(ps_square(ps_sin), ps_square(ps_cos))
+    ps_one = InfStream.add(ps_square(ps_sin), ps_square(ps_cos))
     ps_tan = ps_div(ps_sin, ps_cos)
     # test prepare
     fact = make_factorial()

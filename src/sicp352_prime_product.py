@@ -4,15 +4,21 @@
 # but it can also be solved using pure iteration
 # using the same idea
 
-from typing import List
+from typing import List, TypedDict
 
 
-def prime_product(primes: List[int], n) -> List[int]:
+class PrimeWorker(TypedDict):
+    prime: int
+    pos: int
+    value: int
+
+
+def prime_product(primes: List[int], n: int) -> List[int]:
     result = [1]
-    workers = [{'prime': p, 'pos': 0, 'value': p} for p in primes]
+    workers: List[PrimeWorker] = [{'prime': p, 'pos': 0, 'value': p} for p in primes]
     for _ in range(n-1):
         # find min
-        min_worker_index = 0
+        min_worker_index: int = 0
         for i in range(1, len(workers)):
             if workers[i]['value'] < workers[min_worker_index]['value']:
                 min_worker_index = i
@@ -28,7 +34,7 @@ def prime_product(primes: List[int], n) -> List[int]:
     return result
 
 
-def check_one(primes: List[int], x):
+def check_one(primes: List[int], x: int):
     y = x
     for p in primes:
         while y % p == 0:

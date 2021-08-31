@@ -13,12 +13,12 @@
 
 import math
 from typing import Callable
-from sicp352_prime_number import Stream
+from sicp352_prime_number import InfStream
 
 
 def solve(f: Callable[[float], float], y0: float, dt: float):
-    y = Stream(y0, lambda: Stream.add(y, dy.scale(dt)))
-    dy = Stream.map(f, y)
+    y = InfStream(y0, lambda: InfStream.add(y, dy.scale(dt)))
+    dy = InfStream.map(f, y)
     return y
 
 

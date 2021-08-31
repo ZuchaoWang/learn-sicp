@@ -1,5 +1,5 @@
 import math
-from sicp352_prime_number import Stream
+from sicp352_prime_number import InfStream
 
 
 def make_pi_summands():
@@ -8,12 +8,12 @@ def make_pi_summands():
         head = 1/(2*n+1)
         if n % 2 == 1:
             head = -head
-        return Stream(head, lambda: make_pi_summands_from(n+1))
+        return InfStream(head, lambda: make_pi_summands_from(n+1))
     return make_pi_summands_from(0)
 
 
-def partial_sum(s: Stream):
-    ps = Stream(s.value(), lambda: Stream.add(ps, s.next()))
+def partial_sum(s: InfStream):
+    ps = InfStream(s.value(), lambda: InfStream.add(ps, s.next()))
     return ps
 
 
@@ -24,7 +24,7 @@ def make_pi_raw():
     return partial_sum(pi_summands).scale(4)
 
 
-def euler_transform(s: Stream):
+def euler_transform(s: InfStream):
     '''only applicable to alternative series'''
     v0 = s.value()
     v1 = s.next().value()
@@ -33,29 +33,29 @@ def euler_transform(s: Stream):
         head = v2
     else:
         head = v2-(v2-v1)*(v2-v1)/(v2-v1*2+v0)
-    return Stream(head, lambda: euler_transform(s.next()))
+    return InfStream(head, lambda: euler_transform(s.next()))
 
 
-def make_pi_acc_table(s: Stream):
+def make_pi_acc_table(s: InfStream):
     '''each item is itself a stream of estimation'''
-    return Stream(s, lambda: make_pi_acc_table(euler_transform(s)))
+    return InfStream(s, lambda: make_pi_acc_table(euler_transform(s)))
 
 
-def make_pi_acc1(table: Stream) -> Stream:
+def make_pi_acc1(table: InfStream) -> InfStream:
     '''row 1 of table'''
     return table.next().value()
 
 
-def make_pi_acc2(table: Stream) -> Stream:
+def make_pi_acc2(table: InfStream) -> InfStream:
     '''column 0 of table'''
-    return Stream.map(lambda s: s.value(), table)
+    return InfStream.map(lambda s: s.value(), table)
 
 
-def make_pi_acc3(table: Stream) -> Stream:
+def make_pi_acc3(table: InfStream) -> InfStream:
     '''diagonal of table'''
     def make_pi_acc3_from(n: int):
         head = table.nth_value(n).nth_value(n)
-        return Stream(head, lambda: make_pi_acc3_from(n+1))
+        return InfStream(head, lambda: make_pi_acc3_from(n+1))
     return make_pi_acc3_from(0)
 
 
