@@ -669,11 +669,11 @@ def check_duplicate_parameters(parameters: List[Token]):
     return None
 
 
-def parse_list_parameters(paren: Token, combos: List[TokenCombo]):
+def parse_list_parameters(combos: List[TokenCombo]):
     parameters = [parse_sub_symbol_token(subcombo, 'parameter') for subcombo in combos]
     para_dup = check_duplicate_parameters(parameters)
     if para_dup is not None:
-        raise SchemeParserError(paren, 'parameters should be unique, now %s show up twice' % para_dup.literal)
+        raise SchemeParserError(para_dup, 'parameter show up twice')
     return parameters
 
 
@@ -696,7 +696,7 @@ def parse_list_define(combo: TokenList):
                 combo.anchor, 'define procedure should provide name')
         subcombo10 = subcombo1.contents[0]
         name = parse_sub_symbol_token(subcombo10, 'define procedure name')
-        parameters = parse_list_parameters(combo.anchor, subcombo1.contents[1:])
+        parameters = parse_list_parameters(subcombo1.contents[1:])
         body = SequenceExpr(combo.anchor, [parse_expr_recursive(subcombo) for subcombo in combo.contents[2:]])
         return DefineProcExpr(keyword, name, parameters, body)
     else:
@@ -747,7 +747,7 @@ def parse_list_lambda(combo: TokenList):
     keyword = parse_sub_symbol_token(combo.contents[0], 'keyword')
     subcombo1 = combo.contents[1]
     if isinstance(subcombo1, TokenList):
-        parameters = parse_list_parameters(combo.anchor, subcombo1.contents)
+        parameters = parse_list_parameters(subcombo1.contents)
         body = SequenceExpr(combo.anchor, [parse_expr_recursive(subcombo) for subcombo in combo.contents[2:]])
         return LambdaExpr(keyword, parameters, body)
     else:
@@ -770,7 +770,7 @@ def parse_list_let(combo: TokenList):
         names_and_intializers = [cast(TokenList, subcombo).contents for subcombo in subcombo1.contents]
         if not all([len(combo_pair) == 2 for combo_pair in names_and_intializers]):
             raise SchemeParserError(combo.anchor, 'let 2nd expression should be list of list of 2 expressions')
-        parameters = parse_list_parameters(combo.anchor, [expr_pair[0] for expr_pair in names_and_intializers])
+        parameters = parse_list_parameters([expr_pair[0] for expr_pair in names_and_intializers])
         body = SequenceExpr(combo.anchor, [parse_expr_recursive(subcombo) for subcombo in combo.contents[2:]])
         operator = LambdaExpr(keyword, parameters, body)
         operands = [parse_expr_recursive(combo_pair[1]) for combo_pair in names_and_intializers]
@@ -1926,7 +1926,7 @@ def test_parse():
     # define proc same parameter
     test_one(
         '(define (f x x) (+ x 1))',
-        panic='parser error at LEFT_PAREN in line 1: parameters should be unique, now x show up twice'
+        panic='parser error at SYMBOL:x in line 1: parameter show up twice'
     )
     # desugaring let
     test_one(
