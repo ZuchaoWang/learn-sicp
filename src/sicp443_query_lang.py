@@ -9,8 +9,8 @@ step 3 assumes input qexpressions are valid, and will generates qpatterns that h
 it's the qpatterns that will be used for matching calculation
 '''
 
-from typing import Callable, Dict, List, Optional, Set, Type, TypeVar
-from sicp414_evaluator import SchemeParserError, Token, TokenCombo, TokenList, TokenLiteral, TokenQuote, TokenTag, find_type, format_bool, format_float
+from typing import Callable, Dict, List, Optional, Set, Type, TypeVar, TypedDict, Union
+from sicp414_evaluator import SchemePanic, SchemeParserError, Token, TokenCombo, TokenList, TokenLiteral, TokenQuote, TokenTag, find_type, format_bool, format_float, parse_tokens, scan_source, scheme_panic
 
 
 class QExpression:
@@ -158,17 +158,20 @@ _parse_compound_qexpr_rules: Dict[str, ParseCompoundQExprRuleType] = {}
 
 
 def parse_qexpr(combo: TokenCombo):
-    parse_qexpr_check_valid(combo)
-    assert isinstance(combo, TokenList)
-    first_content = combo.contents[0]
-    '''first check special form by first symbol'''
-    if first_content.anchor.tag == TokenTag.SYMBOL:
-        cmd = first_content.anchor.literal
-        if cmd in _parse_compound_qexpr_rules:
-            f = _parse_compound_qexpr_rules[cmd]
-            return f(combo)
-    '''default to simple pattern'''
-    return parse_simple_qexpr(combo)
+    try:
+        parse_qexpr_check_valid(combo)
+        assert isinstance(combo, TokenList)
+        first_content = combo.contents[0]
+        '''first check special form by first symbol'''
+        if first_content.anchor.tag == TokenTag.SYMBOL:
+            cmd = first_content.anchor.literal
+            if cmd in _parse_compound_qexpr_rules:
+                f = _parse_compound_qexpr_rules[cmd]
+                return f(combo)
+        '''default to simple pattern'''
+        return parse_simple_qexpr(combo)
+    except SchemeParserError as err:
+        scheme_panic(str(err))
 
 
 def update_parse_compound_qexpr_rules(rules: Dict[str, ParseCompoundQExprRuleType]):
@@ -183,22 +186,30 @@ _check_qexpr_forbid_rules: Dict[Type, CheckForbidFuncType] = {}
 
 
 def check_qexpr_forbid(qexpr: QExpression, forbid_types: List[Type]):
+    try:
+        check_qexpr_forbid_recursive(qexpr, forbid_types)
+    except SchemeParserError as err:
+        scheme_panic(str(err))
+
+
+def check_qexpr_forbid_recursive(qexpr: QExpression, forbid_types: List[Type]):
     t = find_type(type(qexpr), _check_qexpr_forbid_rules)
     f = _check_qexpr_forbid_rules[t]
     f(qexpr, forbid_types)
 
 
 def check_qexpr_forbid_self(qexpr: QExpression, forbid_types: List[Type]):
-    if isinstance(qexpr, tuple(forbid_types)):
-        raise SchemeParserError(qexpr.token, 'pattern type forbidden')
+    for ft in forbid_types:
+        if isinstance(qexpr, ft):
+            raise SchemeParserError(qexpr.token, 'pattern type %s forbidden' % ft.__name__)
 
 
 def check_qexpr_forbid_list(qexpr: ListQExpr, forbid_types: List[Type]):
     check_qexpr_forbid_self(qexpr, forbid_types)
     for subqexpr in qexpr.contents:
-        check_qexpr_forbid(subqexpr, forbid_types)
+        check_qexpr_forbid_recursive(subqexpr, forbid_types)
     if qexpr.tail is not None:
-        check_qexpr_forbid(qexpr.tail, forbid_types)
+        check_qexpr_forbid_recursive(qexpr.tail, forbid_types)
 
 
 def update_check_qexpr_forbid_rules(rules: Dict[Type, CheckForbidFuncType]):
@@ -224,7 +235,10 @@ def check_qexpr_unbound_recursive(qexpr: QExpression, depth: int, seen_variables
 
 
 def check_qexpr_unbound(qexpr: QExpression):
-    check_qexpr_unbound_recursive(qexpr, 0, set())
+    try:
+        check_qexpr_unbound_recursive(qexpr, 0, set())
+    except SchemeParserError as err:
+        scheme_panic(str(err))
 
 
 def check_qexpr_unbound_pass(qexpr: QExpression, depth: int, seen_variables: Set[str]):
@@ -264,9 +278,12 @@ _check_qexpr_var_rules: Dict[Type, CheckVarFuncType] = {}
 
 
 def check_qexpr_var(qexpr: QExpression):
-    has_var = check_qexpr_var_recursive(qexpr)
-    if not has_var:
-        raise SchemeParserError(qexpr.token, 'no variable exist')
+    try:
+        has_var = check_qexpr_var_recursive(qexpr)
+        if not has_var:
+            raise SchemeParserError(qexpr.token, 'no variable exist')
+    except SchemeParserError as err:
+        scheme_panic(str(err))
 
 
 def check_qexpr_var_recursive(qexpr: QExpression):
@@ -313,7 +330,9 @@ class QPattern:
     no token information remained
     '''
 
+
 GenericQPat = TypeVar("GenericQPat", bound=QPattern)
+
 
 class StringQPat(QPattern):
     def __init__(self, value: str):
@@ -357,7 +376,13 @@ class VarQPat(QPattern):
         self.version = version
 
 
+class EmptyQPat(QPattern):
+    '''used for empty rule body, called always-true in the book'''
+    pass
+
+
 '''pair pattern'''
+
 
 def pair_from_list_pattern(fronts: List[QPattern], last: QPattern):
     head: QPattern = last
@@ -375,6 +400,7 @@ def pair_to_list_pattern(sv: PairQPat):
     last = head
     return fronts, last
 
+
 '''parse patterns'''
 
 ParseQPatternFuncType = Callable[[GenericQExpr], QPattern]
@@ -383,6 +409,12 @@ _parse_qpattern_rules: Dict[Type, ParseQPatternFuncType] = {}
 
 
 def parse_qpattern(qexpr: QExpression):
+    try:
+        return parse_qpattern_recursive(qexpr)
+    except SchemeParserError as err:
+        scheme_panic(str(err))
+
+def parse_qpattern_recursive(qexpr: QExpression):
     t = find_type(type(qexpr), _parse_qpattern_rules)
     f = _parse_qpattern_rules[t]
     return f(qexpr)
@@ -409,8 +441,8 @@ def parse_qpattern_var(qexpr: VarQExpr):
 
 
 def parse_qpattern_list(qexpr: ListQExpr):
-    fronts = [parse_qpattern(subqexpr) for subqexpr in qexpr.contents]
-    last = parse_qpattern(qexpr.tail) if qexpr.tail is not None else NilQPat()
+    fronts = [parse_qpattern_recursive(subqexpr) for subqexpr in qexpr.contents]
+    last = parse_qpattern_recursive(qexpr.tail) if qexpr.tail is not None else NilQPat()
     return pair_from_list_pattern(fronts, last)
 
 
@@ -443,23 +475,30 @@ def stringify_qpattern(pat: QPattern):
     f = _stringify_qpattern_rules[t]
     return f(pat)
 
+
 def stringify_qpattern_symbol(pat: SymbolQPat):
     return pat.name
+
 
 def stringify_qpattern_var(pat: VarQPat):
     return pat.name
 
+
 def stringify_qpattern_string(pat: StringQPat):
     return '"%s"' % pat.value
+
 
 def stringify_qpattern_number(pat: NumberQPat):
     return format_float(pat.value)
 
+
 def stringify_qpattern_boolean(pat: BooleanQPat):
     return format_bool(pat.value)
 
+
 def stringify_qpattern_nil(pat: NilQPat):
     return '()'
+
 
 def stringify_qpattern_pair(pat: PairQPat):
     fronts, last = pair_to_list_pattern(pat)
@@ -470,6 +509,11 @@ def stringify_qpattern_pair(pat: PairQPat):
         right_str = stringify_qpattern(last)
         return '(%s . %s)' % (left_str, right_str)
 
+
+def stringify_qpattern_empty(pat: EmptyQPat):
+    return '[empty]'
+
+
 update_stringify_qpattern_rules({
     StringQPat: stringify_qpattern_string,
     NumberQPat: stringify_qpattern_number,
@@ -478,6 +522,7 @@ update_stringify_qpattern_rules({
     VarQPat: stringify_qpattern_var,
     NilQPat: stringify_qpattern_nil,
     PairQPat: stringify_qpattern_pair,
+    EmptyQPat: stringify_qpattern_empty
 })
 
 '''parse assertions, rules, query'''
@@ -490,8 +535,11 @@ def parse_assertion(combo: TokenCombo):
     return pat
 
 
-def parse_all_assertions(combos: List[TokenCombo]):
-    return [parse_assertion(subcombo) for subcombo in combos]
+def read_all_assertions(source: str):
+    tokens = scan_source(source)
+    combos = parse_tokens(tokens)
+    assertions = [parse_assertion(subcombo) for subcombo in combos]
+    return assertions
 
 
 def parse_query(combo: TokenCombo):
@@ -502,7 +550,9 @@ def parse_query(combo: TokenCombo):
     return pat
 
 
-def parse_single_query(combos: List[TokenCombo]):
+def read_single_query(source: str):
+    tokens = scan_source(source)
+    combos = parse_tokens(tokens)
     if len(combos) > 1:
         raise SchemeParserError(
             combos[-1].anchor, 'should have exactly one query')
@@ -510,11 +560,6 @@ def parse_single_query(combos: List[TokenCombo]):
         root_token = Token(TokenTag.ROOT, 0, '', None)
         raise SchemeParserError(root_token, 'should have exactly one query')
     return parse_query(combos[0])
-
-
-class EmptyQPat(QPattern):
-    '''used for empty rule body, called always-true in the book'''
-    pass
 
 
 class QRule:
@@ -543,8 +588,11 @@ def parse_qrule(combo: TokenCombo):
     return QRule(concl_pat, body_pat)
 
 
-def parse_all_qrules(combos: List[TokenCombo]):
-    return [parse_qrule(subcombo) for subcombo in combos]
+def read_all_qrules(source: str):
+    tokens = scan_source(source)
+    combos = parse_tokens(tokens)
+    qrules = [parse_qrule(subcombo) for subcombo in combos]
+    return qrules
 
 
 '''special form: and'''
@@ -567,7 +615,7 @@ def parse_compound_qexpr_and(combo: TokenList):
 def check_qexpr_forbid_and(qexpr: AndQExpr, forbid_types: List[Type]):
     check_qexpr_forbid_self(qexpr, forbid_types)
     for subqexpr in qexpr.contents:
-        check_qexpr_forbid(subqexpr, forbid_types)
+        check_qexpr_forbid_recursive(subqexpr, forbid_types)
 
 
 def check_qexpr_unbound_and(qexpr: AndQExpr, depth: int, seen_variables: Set[str]):
@@ -589,12 +637,24 @@ class AndQPat(QPattern):
 
 
 def parse_qpattern_and(qexpr: AndQExpr):
-    contents = [parse_qpattern(subqexpr) for subqexpr in qexpr.contents]
+    contents = [parse_qpattern_recursive(subqexpr) for subqexpr in qexpr.contents]
     return AndQPat(contents)
 
+
 def stringify_qpattern_and(pat: AndQPat):
-    contents_str = ' '.join([stringify_qpattern(subpat) for subpat in pat.contents])
+    contents_str = ' '.join([stringify_qpattern(subpat)
+                             for subpat in pat.contents])
     return '(and %s)' % contents_str
+
+
+def install_special_form_and():
+    update_parse_compound_qexpr_rules({'and': parse_compound_qexpr_and})
+    update_check_qexpr_forbid_rules({AndQExpr: check_qexpr_forbid_and})
+    update_check_qexpr_unbound_rules({AndQExpr: check_qexpr_unbound_and})
+    update_check_qexpr_var_rules({AndQExpr: check_qexpr_var_and})
+    update_parse_qpattern_rules({AndQExpr: parse_qpattern_and})
+    update_stringify_qpattern_rules({AndQPat: stringify_qpattern_and})
+
 
 '''special form: or'''
 
@@ -616,7 +676,7 @@ def parse_compound_qexpr_or(combo: TokenList):
 def check_qexpr_forbid_or(qexpr: OrQExpr, forbid_types: List[Type]):
     check_qexpr_forbid_self(qexpr, forbid_types)
     for subqexpr in qexpr.contents:
-        check_qexpr_forbid(subqexpr, forbid_types)
+        check_qexpr_forbid_recursive(subqexpr, forbid_types)
 
 
 def check_qexpr_unbound_or(qexpr: OrQExpr, depth: int, seen_variables: Set[str]):
@@ -638,12 +698,23 @@ class OrQPat(QPattern):
 
 
 def parse_qpattern_or(qexpr: OrQExpr):
-    contents = [parse_qpattern(subqexpr) for subqexpr in qexpr.contents]
+    contents = [parse_qpattern_recursive(subqexpr) for subqexpr in qexpr.contents]
     return OrQPat(contents)
 
+
 def stringify_qpattern_or(pat: OrQPat):
-    contents_str = ' '.join([stringify_qpattern(subpat) for subpat in pat.contents])
+    contents_str = ' '.join([stringify_qpattern(subpat)
+                             for subpat in pat.contents])
     return '(or %s)' % contents_str
+
+
+def install_special_form_or():
+    update_parse_compound_qexpr_rules({'or': parse_compound_qexpr_or})
+    update_check_qexpr_forbid_rules({OrQExpr: check_qexpr_forbid_or})
+    update_check_qexpr_unbound_rules({OrQExpr: check_qexpr_unbound_or})
+    update_check_qexpr_var_rules({OrQExpr: check_qexpr_var_or})
+    update_parse_qpattern_rules({OrQExpr: parse_qpattern_or})
+    update_stringify_qpattern_rules({OrQPat: stringify_qpattern_or})
 
 
 '''special form: not'''
@@ -665,7 +736,7 @@ def parse_compound_qexpr_not(combo: TokenList):
 
 def check_qexpr_forbid_not(qexpr: NotQExpr, forbid_types: List[Type]):
     check_qexpr_forbid_self(qexpr, forbid_types)
-    check_qexpr_forbid(qexpr.content, forbid_types)
+    check_qexpr_forbid_recursive(qexpr.content, forbid_types)
 
 
 def check_qexpr_unbound_not(qexpr: NotQExpr, depth: int, seen_variables: Set[str]):
@@ -685,12 +756,23 @@ class NotQPat(QPattern):
 
 
 def parse_qpattern_not(qexpr: NotQExpr):
-    content = parse_qpattern(qexpr.content)
+    content = parse_qpattern_recursive(qexpr.content)
     return NotQPat(content)
+
 
 def stringify_qpattern_not(pat: NotQPat):
     content_str = stringify_qpattern(pat.content)
     return '(not %s)' % content_str
+
+
+def install_special_form_not():
+    update_parse_compound_qexpr_rules({'not': parse_compound_qexpr_not})
+    update_check_qexpr_forbid_rules({NotQExpr: check_qexpr_forbid_not})
+    update_check_qexpr_unbound_rules({NotQExpr: check_qexpr_unbound_not})
+    update_check_qexpr_var_rules({NotQExpr: check_qexpr_var_not})
+    update_parse_qpattern_rules({NotQExpr: parse_qpattern_not})
+    update_stringify_qpattern_rules({NotQPat: stringify_qpattern_not})
+
 
 '''special form: lisp-value'''
 
@@ -711,14 +793,15 @@ def parse_compound_qexpr_pred(combo: TokenList):
         raise SchemeParserError(
             combo.anchor, 'lisp-value special form must have a symbolic operator name')
     operator = combo.contents[1].anchor
-    operands = [parse_simple_qexpr(subqexpr) for subqexpr in combo.contents[2:]]
+    operands = [parse_simple_qexpr(subqexpr)
+                for subqexpr in combo.contents[2:]]
     return PredQExpr(combo.anchor, operator, operands)
 
 
 def check_qexpr_forbid_pred(qexpr: PredQExpr, forbid_types: List[Type]):
     check_qexpr_forbid_self(qexpr, forbid_types)
     for subqexpr in qexpr.operands:
-        check_qexpr_forbid(subqexpr, forbid_types)
+        check_qexpr_forbid_recursive(subqexpr, forbid_types)
 
 
 def check_qexpr_unbound_pred(qexpr: PredQExpr, depth: int, seen_variables: Set[str]):
@@ -741,9 +824,149 @@ class PredQPat(QPattern):
 
 
 def parse_qpattern_pred(qexpr: PredQExpr):
-    operands = [parse_qpattern(subqexpr) for subqexpr in qexpr.operands]
+    operands = [parse_qpattern_recursive(subqexpr) for subqexpr in qexpr.operands]
     return PredQPat(qexpr.operator.literal, operands)
 
+
 def stringify_qpattern_pred(pat: PredQPat):
-    operands_str = ' '.join([stringify_qpattern(subpat) for subpat in pat.operands])
+    operands_str = ' '.join([stringify_qpattern(subpat)
+                             for subpat in pat.operands])
     return '(lisp-value %s %s)' % (pat.operator, operands_str)
+
+
+def install_special_form_pred():
+    update_parse_compound_qexpr_rules(
+        {'lisp-value': parse_compound_qexpr_pred})
+    update_check_qexpr_forbid_rules({PredQExpr: check_qexpr_forbid_pred})
+    update_check_qexpr_unbound_rules({PredQExpr: check_qexpr_unbound_pred})
+    update_check_qexpr_var_rules({PredQExpr: check_qexpr_var_pred})
+    update_parse_qpattern_rules({PredQExpr: parse_qpattern_pred})
+    update_stringify_qpattern_rules({PredQPat: stringify_qpattern_pred})
+
+
+'''initialize test'''
+
+
+def install_rules():
+    install_special_form_and()
+    install_special_form_or()
+    install_special_form_not()
+    install_special_form_pred()
+
+
+class SrcRes(TypedDict):
+    source: str
+    result: Optional[str]
+
+
+def stringify_qrule(qrl: QRule):
+    concl_str = stringify_qpattern(qrl.conclusion)
+    body_str = stringify_qpattern(qrl.body)
+    return '(rule %s %s)' % (concl_str, body_str)
+
+
+def test_one(assertions_obj: SrcRes, qrules_obj: SrcRes, query_objs: List[SrcRes], panic: str):
+    '''
+    each test tries to execute the source code as much as possible
+    capture the output, panic and result
+    print them and compare to expected value
+    '''
+
+    try:
+        assertions_source = assertions_obj['source'].strip()
+        if len(assertions_source):
+            print('* assertions-source: %s' % assertions_source)
+            assertions = read_all_assertions(assertions_source)
+            assertions_str = '\n'.join(
+                [stringify_qpattern(qpat) for qpat in assertions])
+            print('* assertions-parsed: %s' % assertions_str)
+            if assertions_obj['result'] is not None:
+                assert assertions_str == assertions_obj['result']
+
+        qrules_source = qrules_obj['source'].strip()
+        if len(qrules_source):
+            print('* qrules-source: %s' % qrules_source)
+            qrules = read_all_qrules(qrules_source)
+            qrules_str = '\n'.join([stringify_qrule(qrl) for qrl in qrules])
+            print('* qrules-parsed: %s' % qrules_str)
+            if qrules_obj['result'] is not None:
+                assert qrules_str == qrules_obj['result']
+
+        for query_obj in query_objs:
+            query_source = query_obj['source'].strip()
+            print('* query-source: %s' % query_source)
+            query = read_single_query(query_source)
+            query_str = stringify_qpattern(query)
+            print('* query-parsed: %s' % query_str)
+            if query_obj['result'] is not None:
+                assert query_str == query_obj['result']
+        
+        assert panic == ''
+    except SchemePanic as err:
+        # any kind of panic
+        print('* panic: %s' % err.message)
+        assert err.message == panic
+    print('----------')
+
+
+def make_src_res(**kargs: str) -> SrcRes:
+    if 'source' in kargs:
+        if 'result' in kargs:
+            return {'source': kargs['source'], 'result': kargs['result']}
+        else:
+            return {'source': kargs['source'], 'result': None}
+    else:
+        return {'source': '', 'result': None}
+
+
+def test_parse():
+    test_one(
+        assertions_obj=make_src_res(source='some-symbol'),
+        qrules_obj=make_src_res(),
+        query_objs=[],
+        panic='parser error at SYMBOL:some-symbol in line 1: pattern should be list'
+    )
+    test_one(
+        assertions_obj=make_src_res(source='()'),
+        qrules_obj=make_src_res(),
+        query_objs=[],
+        panic='parser error at LEFT_PAREN in line 1: pattern should be non-empty list'
+    )
+    test_one(
+        assertions_obj=make_src_res(source='(salary (Bitdiddle Ben) ?amount)'),
+        qrules_obj=make_src_res(),
+        query_objs=[],
+        panic='parser error at SYMBOL:?amount in line 1: pattern type VarQExpr forbidden'
+    )
+    test_one(
+        assertions_obj=make_src_res(
+            source='''
+            (and (job (Bitdiddle Ben) (computer wizard))
+            (salary (Bitdiddle Ben) 60000))
+            ''',
+            result='(job (Bitdiddle Ben) (computer wizard))\n(salary (Bitdiddle Ben) 60000)'),
+        qrules_obj=make_src_res(),
+        query_objs=[],
+        panic='parser error at LEFT_PAREN in line 1: pattern type SpecialQExpr forbidden'
+    )
+    test_one(
+        assertions_obj=make_src_res(
+            source='''
+            (job   (Bitdiddle Ben) (computer wizard))
+            (salary (Bitdiddle Ben) 60000)
+            ''',
+            result='(job (Bitdiddle Ben) (computer wizard))\n(salary (Bitdiddle Ben) 60000)'),
+        qrules_obj=make_src_res(),
+        query_objs=[],
+        panic=''
+    )
+    
+
+
+def test():
+    test_parse()
+
+
+if __name__ == '__main__':
+    install_rules()
+    test()
