@@ -1396,20 +1396,11 @@ def is_truthy(sv: SchemeVal):
 '''utility functions for pair value'''
 
 
-def pair_from_list(sv_list: List[SchemeVal]):
-    head: SchemeVal = NilVal()
-    for i in range(len(sv_list)-1, -1, -1):
-        head = PairVal(sv_list[i], head)
+def pair_from_list(fronts: List[SchemeVal], last: SchemeVal):
+    head: SchemeVal = last
+    for i in range(len(fronts)-1, -1, -1):
+        head = PairVal(fronts[i], head)
     return head
-
-
-def pair_to_list(sv: Union[NilVal, PairVal]):
-    '''ignore the case where last pair's cdr is not nil'''
-    sv_list: List[SchemeVal] = []
-    head = sv
-    while isinstance(head, PairVal):
-        sv_list.append(head.left)
-    return sv_list
 
 
 def pair_length(sv: PairVal):
@@ -1419,13 +1410,6 @@ def pair_length(sv: PairVal):
         count += 1
         head = head.right
     return count
-
-
-def pair_last(sv: PairVal):
-    head: PairVal = sv
-    while isinstance(head.right, PairVal):
-        head = head.right
-    return head
 
 
 '''
@@ -1446,18 +1430,16 @@ def quote_token_combo(combo: TokenCombo):
         return f(combo.anchor)
     elif isinstance(combo, TokenQuote):
         subvals = [SymbolVal('quote'), quote_token_combo(combo.content)]
-        return pair_from_list(subvals)
+        return pair_from_list(subvals, NilVal())
     else:
         assert isinstance(combo, TokenList)
         if len(combo.contents) >= 2 and combo.contents[-2].anchor.tag == TokenTag.DOT:
             subvals = [quote_token_combo(subcomb) for subcomb in combo.contents[:-2]]
-            head_pair = pair_from_list(subvals)
-            tail_pair = pair_last(head_pair)
-            tail_pair.right = quote_token_combo(combo.contents[-1])
-            return head_pair
+            lastval = quote_token_combo(combo.contents[-1])
+            return pair_from_list(subvals, lastval)
         else:
             subvals = [quote_token_combo(subcomb) for subcomb in combo.contents]
-            return pair_from_list(subvals)
+            return pair_from_list(subvals, NilVal())
 
 
 '''evaluator'''
@@ -1610,7 +1592,7 @@ def pure_eval_call_proc_extend_env(operator: ProcVal, operands: List[SchemeVal])
         arguments = operands
     else:
         parameters = [*operator.pos_paras, operator.rest_para]
-        arguments = [*operands[:len(operator.pos_paras)], pair_from_list(operands[len(operator.pos_paras):])]
+        arguments = [*operands[:len(operator.pos_paras)], pair_from_list(operands[len(operator.pos_paras):], NilVal())]
     return env_extend(operator.env, parameters, arguments)
 
 
@@ -1834,7 +1816,7 @@ def prim_cons(x: SchemeVal, y: SchemeVal):
 
 
 def prim_list(*args: SchemeVal):
-    return pair_from_list(list(args))
+    return pair_from_list(list(args), NilVal())
 
 
 def prim_pair(x: SchemeVal) -> BooleanVal:

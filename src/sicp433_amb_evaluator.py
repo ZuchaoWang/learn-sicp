@@ -3,7 +3,7 @@ import inspect
 from typing import Any, Callable, Dict, List, Optional, Type, Union
 from sicp331_cycle_detect import LinkedListNode
 from sicp414_evaluator import AndExpr, BooleanExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, \
-    Environment, Expression, GenericExpr, IfExpr, LambdaExpr, NilExpr, NotExpr, NumberExpr, OrExpr, \
+    Environment, Expression, GenericExpr, IfExpr, LambdaExpr, NilExpr, NilVal, NotExpr, NumberExpr, OrExpr, \
     PairVal, PrimVal, ProcPlainVal, QuoteExpr, SchemePanic, SchemeParserError, SchemeRuntimeError, \
     SchemeVal, SequenceExpr, SetExpr, StringExpr, SymbolExpr, Token, TokenList, UndefVal, find_type, \
     install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, \
@@ -158,7 +158,7 @@ def amb_evaluate_expr(expr: SequenceExpr, env: Environment, distances: ResDistan
     except AmbEvalFailure:
         pass  # result exhausted
 
-    return pair_from_list(results)
+    return pair_from_list(results, NilVal())
 
 
 '''
