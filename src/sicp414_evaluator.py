@@ -1153,8 +1153,8 @@ non-empty list is represented as pairs
 
 
 class SymbolVal(SchemeVal):
-    def __init__(self, value: str):
-        self.value = value
+    def __init__(self, name: str):
+        self.name = name
 
 
 class StringVal(SchemeVal):
@@ -1251,7 +1251,7 @@ def stringify_value_rule_decorator(rule_func: StringifyValueRuleType):
 
 @stringify_value_rule_decorator
 def stringify_value_symbol(sv: SymbolVal):
-    return sv.value
+    return sv.name
 
 
 @stringify_value_rule_decorator
@@ -1353,7 +1353,12 @@ def is_equal_rule_decorator(rule_func: IsEqualRuleType):
 
 
 @is_equal_rule_decorator
-def is_equal_literal(x: Union[SymbolVal, StringVal, NumberVal, BooleanVal], y: Union[SymbolVal, StringVal, NumberVal, BooleanVal]):
+def is_equal_name(x: SymbolVal, y: SymbolVal):
+    return x.name == y.name
+
+
+@is_equal_rule_decorator
+def is_equal_literal(x: Union[StringVal, NumberVal, BooleanVal], y: Union[StringVal, NumberVal, BooleanVal]):
     return x.value == y.value
 
 
@@ -1369,7 +1374,7 @@ def is_equal_object(x: Union[PairVal, PrimVal, ProcVal], y: Union[PairVal, PrimV
 
 def install_is_equal_rules():
     rules = {
-        SymbolVal: is_equal_literal,
+        SymbolVal: is_equal_name,
         StringVal: is_equal_literal,
         NumberVal: is_equal_literal,
         BooleanVal: is_equal_literal,
