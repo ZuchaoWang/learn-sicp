@@ -10,7 +10,7 @@ it's the qpatterns that will be used for matching calculation
 '''
 
 from typing import Callable, Dict, List, Optional, Set, Type, TypeVar
-from sicp414_evaluator import SchemeParserError, Token, TokenCombo, TokenList, TokenLiteral, TokenQuote, TokenTag, find_type
+from sicp414_evaluator import SchemeParserError, Token, TokenCombo, TokenList, TokenLiteral, TokenQuote, TokenTag, find_type, format_bool, format_float
 
 
 class QExpression:
@@ -313,6 +313,7 @@ class QPattern:
     no token information remained
     '''
 
+GenericQPat = TypeVar("GenericQPat", bound=QPattern)
 
 class StringQPat(QPattern):
     def __init__(self, value: str):
@@ -356,6 +357,24 @@ class VarQPat(QPattern):
         self.version = version
 
 
+'''pair pattern'''
+
+def pair_from_list_pattern(fronts: List[QPattern], last: QPattern):
+    head: QPattern = last
+    for i in range(len(fronts)-1, -1, -1):
+        head = PairQPat(fronts[i], head)
+    return head
+
+
+def pair_to_list_pattern(sv: PairQPat):
+    fronts: List[QPattern] = []
+    head: QPattern = sv
+    while isinstance(head, PairQPat):
+        fronts.append(head.left)
+        head = head.right
+    last = head
+    return fronts, last
+
 '''parse patterns'''
 
 ParseQPatternFuncType = Callable[[GenericQExpr], QPattern]
@@ -390,11 +409,9 @@ def parse_qpattern_var(qexpr: VarQExpr):
 
 
 def parse_qpattern_list(qexpr: ListQExpr):
-    head: QPattern = parse_qpattern(
-        qexpr.tail) if qexpr.tail is not None else NilQPat()
-    for i in range(len(qexpr.contents)-1, -1, -1):
-        head = PairQPat(parse_qpattern(qexpr.contents[i]), head)
-    return head
+    fronts = [parse_qpattern(subqexpr) for subqexpr in qexpr.contents]
+    last = parse_qpattern(qexpr.tail) if qexpr.tail is not None else NilQPat()
+    return pair_from_list_pattern(fronts, last)
 
 
 def update_parse_qpattern_rules(rules: Dict[Type, ParseQPatternFuncType]):
@@ -408,6 +425,59 @@ update_parse_qpattern_rules({
     SymbolQExpr: parse_qpattern_symbol,
     VarQExpr: parse_qpattern_var,
     ListQExpr: parse_qpattern_list,
+})
+
+'''stringify patterns'''
+
+StringifyQPatternFuncType = Callable[[GenericQPat], str]
+
+_stringify_qpattern_rules: Dict[Type, StringifyQPatternFuncType] = {}
+
+
+def update_stringify_qpattern_rules(rules: Dict[Type, StringifyQPatternFuncType]):
+    _stringify_qpattern_rules.update(rules)
+
+
+def stringify_qpattern(pat: QPattern):
+    t = find_type(type(pat), _stringify_qpattern_rules)
+    f = _stringify_qpattern_rules[t]
+    return f(pat)
+
+def stringify_qpattern_symbol(pat: SymbolQPat):
+    return pat.name
+
+def stringify_qpattern_var(pat: VarQPat):
+    return pat.name
+
+def stringify_qpattern_string(pat: StringQPat):
+    return '"%s"' % pat.value
+
+def stringify_qpattern_number(pat: NumberQPat):
+    return format_float(pat.value)
+
+def stringify_qpattern_boolean(pat: BooleanQPat):
+    return format_bool(pat.value)
+
+def stringify_qpattern_nil(pat: NilQPat):
+    return '()'
+
+def stringify_qpattern_pair(pat: PairQPat):
+    fronts, last = pair_to_list_pattern(pat)
+    left_str = ' '.join([stringify_qpattern(subpat) for subpat in fronts])
+    if isinstance(last, NilQPat):
+        return '(%s)' % left_str
+    else:
+        right_str = stringify_qpattern(last)
+        return '(%s . %s)' % (left_str, right_str)
+
+update_stringify_qpattern_rules({
+    StringQPat: stringify_qpattern_string,
+    NumberQPat: stringify_qpattern_number,
+    BooleanQPat: stringify_qpattern_boolean,
+    SymbolQPat: stringify_qpattern_symbol,
+    VarQPat: stringify_qpattern_var,
+    NilQPat: stringify_qpattern_nil,
+    PairQPat: stringify_qpattern_pair,
 })
 
 '''parse assertions, rules, query'''
@@ -522,6 +592,9 @@ def parse_qpattern_and(qexpr: AndQExpr):
     contents = [parse_qpattern(subqexpr) for subqexpr in qexpr.contents]
     return AndQPat(contents)
 
+def stringify_qpattern_and(pat: AndQPat):
+    contents_str = ' '.join([stringify_qpattern(subpat) for subpat in pat.contents])
+    return '(and %s)' % contents_str
 
 '''special form: or'''
 
@@ -568,6 +641,10 @@ def parse_qpattern_or(qexpr: OrQExpr):
     contents = [parse_qpattern(subqexpr) for subqexpr in qexpr.contents]
     return OrQPat(contents)
 
+def stringify_qpattern_or(pat: OrQPat):
+    contents_str = ' '.join([stringify_qpattern(subpat) for subpat in pat.contents])
+    return '(or %s)' % contents_str
+
 
 '''special form: not'''
 
@@ -611,6 +688,9 @@ def parse_qpattern_not(qexpr: NotQExpr):
     content = parse_qpattern(qexpr.content)
     return NotQPat(content)
 
+def stringify_qpattern_not(pat: NotQPat):
+    content_str = stringify_qpattern(pat.content)
+    return '(not %s)' % content_str
 
 '''special form: lisp-value'''
 
@@ -623,6 +703,7 @@ class PredQExpr(SpecialQExpr):
 
 
 def parse_compound_qexpr_pred(combo: TokenList):
+    '''notice operands can only be simple qexpressions'''
     if len(combo.contents) < 3:
         raise SchemeParserError(
             combo.anchor, 'lisp-value special form need at least 3 terms')
@@ -630,7 +711,7 @@ def parse_compound_qexpr_pred(combo: TokenList):
         raise SchemeParserError(
             combo.anchor, 'lisp-value special form must have a symbolic operator name')
     operator = combo.contents[1].anchor
-    operands = [parse_qexpr(subqexpr) for subqexpr in combo.contents[2:]]
+    operands = [parse_simple_qexpr(subqexpr) for subqexpr in combo.contents[2:]]
     return PredQExpr(combo.anchor, operator, operands)
 
 
@@ -662,3 +743,7 @@ class PredQPat(QPattern):
 def parse_qpattern_pred(qexpr: PredQExpr):
     operands = [parse_qpattern(subqexpr) for subqexpr in qexpr.operands]
     return PredQPat(qexpr.operator.literal, operands)
+
+def stringify_qpattern_pred(pat: PredQPat):
+    operands_str = ' '.join([stringify_qpattern(subpat) for subpat in pat.operands])
+    return '(lisp-value %s %s)' % (pat.operator, operands_str)

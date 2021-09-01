@@ -1281,14 +1281,12 @@ def stringify_value_undef():
 
 @stringify_value_rule_decorator
 def stringify_value_pair(sv: PairVal):
-    left_str = stringify_value(sv.left)
-    right_str = stringify_value(sv.right)
-    if isinstance(sv.right, NilVal):
+    fronts, last = pair_to_list_val(sv)
+    left_str = ' '.join([stringify_value(subsv) for subsv in fronts])
+    if isinstance(last, NilVal):
         return '(%s)' % left_str
-    elif isinstance(sv.right, PairVal):
-        # right_str strip off paranthesis
-        return '(%s %s)' % (left_str, right_str[1:-1])
     else:
+        right_str = stringify_value(last)
         return '(%s . %s)' % (left_str, right_str)
 
 
@@ -1406,6 +1404,16 @@ def pair_from_list_val(fronts: List[SchemeVal], last: SchemeVal):
     for i in range(len(fronts)-1, -1, -1):
         head = PairVal(fronts[i], head)
     return head
+
+
+def pair_to_list_val(sv: PairVal):
+    fronts: List[SchemeVal] = []
+    head: SchemeVal = sv
+    while isinstance(head, PairVal):
+        fronts.append(head.left)
+        head = head.right
+    last = head
+    return fronts, last
 
 
 def pair_val_length(sv: PairVal):
