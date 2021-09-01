@@ -7,7 +7,7 @@ from sicp414_evaluator import AndExpr, BooleanExpr, BooleanVal, CallExpr, Define
     PairVal, PrimVal, ProcPlainVal, QuoteExpr, SchemePanic, SchemeParserError, SchemeRuntimeError, \
     SchemeVal, SequenceExpr, SetExpr, StringExpr, SymbolExpr, Token, TokenList, UndefVal, find_type, \
     install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, \
-    install_stringify_value_rules, is_truthy, make_global_env, pair_from_list, parse_expr, parse_expr_recursive, parse_sub_symbol_token, parse_tokens, \
+    install_stringify_value_rules, is_truthy, make_global_env, pair_from_list_val, parse_expr, parse_expr_recursive, parse_sub_symbol_token, parse_tokens, \
     pure_check_proc_arity, pure_eval_boolean, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_call_proc_extend_env, pure_eval_define_proc_plain, \
     pure_eval_define_var, pure_eval_lambda_plain, pure_eval_nil, pure_eval_number, pure_eval_string, quote_token_combo, scan_source, scheme_flush, \
     scheme_panic, stringify_expr, stringify_expr_rule_decorator, stringify_value, update_parse_expr_rules, update_stringify_expr_rules
@@ -158,7 +158,7 @@ def amb_evaluate_expr(expr: SequenceExpr, env: Environment, distances: ResDistan
     except AmbEvalFailure:
         pass  # result exhausted
 
-    return pair_from_list(results, NilVal())
+    return pair_from_list_val(results, NilVal())
 
 
 '''

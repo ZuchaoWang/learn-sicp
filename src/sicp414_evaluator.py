@@ -1396,14 +1396,14 @@ def is_truthy(sv: SchemeVal):
 '''utility functions for pair value'''
 
 
-def pair_from_list(fronts: List[SchemeVal], last: SchemeVal):
+def pair_from_list_val(fronts: List[SchemeVal], last: SchemeVal):
     head: SchemeVal = last
     for i in range(len(fronts)-1, -1, -1):
         head = PairVal(fronts[i], head)
     return head
 
 
-def pair_length(sv: PairVal):
+def pair_val_length(sv: PairVal):
     count = 0
     head: SchemeVal = sv
     while isinstance(head, PairVal):
@@ -1430,16 +1430,16 @@ def quote_token_combo(combo: TokenCombo):
         return f(combo.anchor)
     elif isinstance(combo, TokenQuote):
         subvals = [SymbolVal('quote'), quote_token_combo(combo.content)]
-        return pair_from_list(subvals, NilVal())
+        return pair_from_list_val(subvals, NilVal())
     else:
         assert isinstance(combo, TokenList)
         if len(combo.contents) >= 2 and combo.contents[-2].anchor.tag == TokenTag.DOT:
             subvals = [quote_token_combo(subcomb) for subcomb in combo.contents[:-2]]
             lastval = quote_token_combo(combo.contents[-1])
-            return pair_from_list(subvals, lastval)
+            return pair_from_list_val(subvals, lastval)
         else:
             subvals = [quote_token_combo(subcomb) for subcomb in combo.contents]
-            return pair_from_list(subvals, NilVal())
+            return pair_from_list_val(subvals, NilVal())
 
 
 '''evaluator'''
@@ -1592,7 +1592,7 @@ def pure_eval_call_proc_extend_env(operator: ProcVal, operands: List[SchemeVal])
         arguments = operands
     else:
         parameters = [*operator.pos_paras, operator.rest_para]
-        arguments = [*operands[:len(operator.pos_paras)], pair_from_list(operands[len(operator.pos_paras):], NilVal())]
+        arguments = [*operands[:len(operator.pos_paras)], pair_from_list_val(operands[len(operator.pos_paras):], NilVal())]
     return env_extend(operator.env, parameters, arguments)
 
 
@@ -1806,7 +1806,7 @@ def make_prim_pair_any(py_func: Callable[[PairVal], SchemeVal]):
     return _prim_pair_any
 
 
-prim_length = make_prim_pair_any(lambda x: NumberVal(pair_length(x)))
+prim_length = make_prim_pair_any(lambda x: NumberVal(pair_val_length(x)))
 prim_car = make_prim_pair_any(lambda x: x.left)
 prim_cdr = make_prim_pair_any(lambda x: x.right)
 
@@ -1816,7 +1816,7 @@ def prim_cons(x: SchemeVal, y: SchemeVal):
 
 
 def prim_list(*args: SchemeVal):
-    return pair_from_list(list(args), NilVal())
+    return pair_from_list_val(list(args), NilVal())
 
 
 def prim_pair(x: SchemeVal) -> BooleanVal:
