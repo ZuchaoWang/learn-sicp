@@ -1,12 +1,25 @@
 '''
-raw string input will be scanned to tokens
-the following parsing takes 3 steps:
-step 1 converts tokens into token combos
-step 2 converts token combos into qexpressions
-step 3 converts qexpressions into qpatterns
-in step 1-2, errors are detected and printed with token information
-step 3 assumes input qexpressions are valid, and will generates qpatterns that has no token information
-it's the qpatterns that will be used for matching calculation
+the goal is to implement query language
+compared to that in the book, I parse from raw string and I do extra grammar checking
+but I will not implement indexing and instantiate
+
+the parsing is built on sicp414_evaluator, where raw string input is scanned to tokens, then built into token combos
+after that token combos are converted into qxpressions (query-expression), and several grammar checkings are performed in qxpression
+qxpression contains token information, so that failed grammar checks can refer to tokens in the source code
+after that qxpressions are converted to patterns where tokens are stripped off
+
+the qeval (query evaluation) takes query, assertions, rules and an initial empty frame as input
+where query and assertion are represented directly as patterns
+rule is represented as conclusion pattern and body pattern
+I don't implement indexing on assertions and rules, so they are each arranged as one long stream
+frames are represented as a linked list of bindings
+the qeval calculation largely follows the book, except that I don't implement pattern-match
+I feel unify-match covers all the functionalities of pattern-match, so I just use unify-match
+the result of qeval is a stream of frames, I just print them like ?x=1 without doing full instantiation
+
+the general code structure is that I first implement the simple query
+then add each special form: and, or, not, lisp-value
+finally do the testing
 '''
 
 from typing import Callable, Dict, Generic, List, Optional, Set, Type, TypeVar, TypedDict, Union, cast
@@ -21,6 +34,10 @@ class Qxpression:
     '''
     the base class for all query expressions (Qxpression), use class for easier static type checking
     Qxpression will store token for debugging purpose
+
+    although Qxpression and Pattern are very similar
+    I want Qxpression to contain token information, and Pattern to not contain token information
+    that's why I implemented them seperately, with a lot of efforts
     '''
     pass
 
@@ -29,6 +46,11 @@ GenericQxpr = TypeVar("GenericQxpr", bound=Qxpression)
 
 
 class SimpleQxpr(Qxpression):
+    '''
+    simple query expression, useful for type checking
+    e.g. ListQxpr can only contain SimpleQxpr
+    e.g. rule conclusion can only be SimpleQxpr 
+    '''
     def __init__(self, token: Token):
         super().__init__(token)
 
@@ -67,8 +89,7 @@ class VarQxpr(SimpleQxpr):
 
 class SpecialQxpr(Qxpression):
     '''
-    base class for special form
-    this class makes it easy to check whether a pattern is a special form
+    base class for special form, used for type checking
     '''
 
     def __init__(self, token: Token):
@@ -83,16 +104,16 @@ finally dot always appear in list and not list head
 '''
 
 
-def parse_qxpr_check_valid(combo: TokenCombo):
+def check_combo_valid_qxpr(combo: TokenCombo):
     if not isinstance(combo, TokenList):
         raise SchemeParserError(combo.anchor, 'pattern should be list')
     if len(combo.contents) == 0:
         raise SchemeParserError(
             combo.anchor, 'pattern should be non-empty list')
-    parse_qxpr_check_valid_recursive(combo)
+    check_combo_valid_qxpr_recursive(combo)
 
 
-def parse_qxpr_check_valid_recursive(combo: TokenCombo):
+def check_combo_valid_qxpr_recursive(combo: TokenCombo):
     if isinstance(combo, TokenLiteral):
         if combo.anchor.tag == TokenTag.DOT:
             raise SchemeParserError(
@@ -104,7 +125,7 @@ def parse_qxpr_check_valid_recursive(combo: TokenCombo):
         assert isinstance(combo, TokenList)
         for (i, subcombo) in enumerate(combo.contents):
             if i == 0 or not isinstance(subcombo, TokenLiteral):
-                parse_qxpr_check_valid_recursive(subcombo)
+                check_combo_valid_qxpr_recursive(subcombo)
 
 
 '''parsing simple pattern from token combo, very similar to quote'''
@@ -146,16 +167,16 @@ def parse_simple_qxpr_literal(combo: TokenLiteral):
 
 def parse_simple_qxpr_list(combo: TokenList):
     if len(combo.contents) >= 2 and combo.contents[-2].anchor.tag == TokenTag.DOT:
-        subqxprs = [parse_simple_qexpr(subcomb)
+        subqxprs = [parse_simple_qxpr_recursive(subcomb)
                     for subcomb in combo.contents[:-2]]
-        lastqxpr = parse_simple_qexpr(combo.contents[-1])
+        lastqxpr = parse_simple_qxpr_recursive(combo.contents[-1])
         return ListQxpr(combo.anchor, subqxprs, lastqxpr)
     else:
-        subqxprs = [parse_simple_qexpr(subcomb) for subcomb in combo.contents]
+        subqxprs = [parse_simple_qxpr_recursive(subcomb) for subcomb in combo.contents]
         return ListQxpr(combo.anchor, subqxprs, None)
 
 
-def parse_simple_qexpr(combo: TokenCombo) -> SimpleQxpr:
+def parse_simple_qxpr_recursive(combo: TokenCombo) -> SimpleQxpr:
     if isinstance(combo, TokenLiteral):
         return parse_simple_qxpr_literal(combo)
     else:
@@ -163,65 +184,76 @@ def parse_simple_qexpr(combo: TokenCombo) -> SimpleQxpr:
         return parse_simple_qxpr_list(combo)
 
 
-ParseSpecialQxprRuleType = Callable[[TokenList], SpecialQxpr]
+def parse_simple_qxpr(combo: TokenCombo) -> ListQxpr:
+    check_combo_valid_qxpr(combo)
+    assert isinstance(combo, TokenList)
+    return parse_simple_qxpr_list(combo)
 
-_parse_special_qxpr_rules: Dict[str, ParseSpecialQxprRuleType] = {}
+
+ParseQxprRuleType = Callable[[TokenList], SpecialQxpr]
+
+_parse_qxpr_rules: Dict[str, ParseQxprRuleType] = {}
 
 
 def parse_qxpr(combo: TokenCombo):
     try:
-        parse_qxpr_check_valid(combo)
+        check_combo_valid_qxpr(combo)
         assert isinstance(combo, TokenList)
         first_content = combo.contents[0]
         '''first check special form by first symbol'''
         if first_content.anchor.tag == TokenTag.SYMBOL:
             cmd = first_content.anchor.literal
-            if cmd in _parse_special_qxpr_rules:
-                f = _parse_special_qxpr_rules[cmd]
+            if cmd in _parse_qxpr_rules:
+                f = _parse_qxpr_rules[cmd]
                 return f(combo)
-        '''default to simple pattern'''
-        return parse_simple_qexpr(combo)
+        '''default to simple pattern, must be list'''
+        return parse_simple_qxpr_list(combo)
     except SchemeParserError as err:
         scheme_panic(str(err))
 
 
-def update_parse_special_qxpr_rules(rules: Dict[str, ParseSpecialQxprRuleType]):
-    _parse_special_qxpr_rules.update(rules)
+def update_parse_qxpr_rules(rules: Dict[str, ParseQxprRuleType]):
+    _parse_qxpr_rules.update(rules)
 
 
-'''forbid types, e.g. assertion cannot have var and special form, rule-conclusion cannot have special form'''
+'''
+in some occassion types, an expression forbids certain types of sub-epxression
+e.g. assertion cannot have var and special form
+e.g. rule-conclusion cannot have special form
+check_qxpr_forbid checks this, and will raise error if violated
+'''
 
 CheckForbidFuncType = Callable[[GenericQxpr, List[Type]], None]
 
 _check_qxpr_forbid_rules: Dict[Type, CheckForbidFuncType] = {}
 
 
-def check_qxpr_forbid(qexpr: Qxpression, forbid_types: List[Type]):
+def check_qxpr_forbid(qxpr: Qxpression, forbid_types: List[Type]):
     try:
-        check_qxpr_forbid_recursive(qexpr, forbid_types)
+        check_qxpr_forbid_recursive(qxpr, forbid_types)
     except SchemeParserError as err:
         scheme_panic(str(err))
 
 
-def check_qxpr_forbid_recursive(qexpr: Qxpression, forbid_types: List[Type]):
-    t = find_type(type(qexpr), _check_qxpr_forbid_rules)
+def check_qxpr_forbid_recursive(qxpr: Qxpression, forbid_types: List[Type]):
+    t = find_type(type(qxpr), _check_qxpr_forbid_rules)
     f = _check_qxpr_forbid_rules[t]
-    f(qexpr, forbid_types)
+    f(qxpr, forbid_types)
 
 
-def check_qxpr_forbid_self(qexpr: Qxpression, forbid_types: List[Type]):
+def check_qxpr_forbid_self(qxpr: Qxpression, forbid_types: List[Type]):
     for ft in forbid_types:
-        if isinstance(qexpr, ft):
+        if isinstance(qxpr, ft):
             raise SchemeParserError(
-                qexpr.token, 'pattern type %s forbidden' % ft.__name__)
+                qxpr.token, 'pattern type %s forbidden' % ft.__name__)
 
 
-def check_qxpr_forbid_list(qexpr: ListQxpr, forbid_types: List[Type]):
-    check_qxpr_forbid_self(qexpr, forbid_types)
-    for subqxpr in qexpr.contents:
+def check_qxpr_forbid_list(qxpr: ListQxpr, forbid_types: List[Type]):
+    check_qxpr_forbid_self(qxpr, forbid_types)
+    for subqxpr in qxpr.contents:
         check_qxpr_forbid_recursive(subqxpr, forbid_types)
-    if qexpr.tail is not None:
-        check_qxpr_forbid_recursive(qexpr.tail, forbid_types)
+    if qxpr.tail is not None:
+        check_qxpr_forbid_recursive(qxpr.tail, forbid_types)
 
 
 def update_check_qxpr_forbid_rules(rules: Dict[Type, CheckForbidFuncType]):
@@ -240,36 +272,36 @@ CheckUnboundFuncType = Callable[[GenericQxpr, int, Set[str]], None]
 _check_qxpr_unbound_rules: Dict[Type, CheckUnboundFuncType] = {}
 
 
-def check_qxpr_unbound_recursive(qexpr: Qxpression, depth: int, seen_variables: Set[str]):
-    t = find_type(type(qexpr), _check_qxpr_unbound_rules)
+def check_qxpr_unbound_recursive(qxpr: Qxpression, depth: int, seen_variables: Set[str]):
+    t = find_type(type(qxpr), _check_qxpr_unbound_rules)
     f = _check_qxpr_unbound_rules[t]
-    f(qexpr, depth, seen_variables)
+    f(qxpr, depth, seen_variables)
 
 
-def check_qxpr_unbound(qexpr: Qxpression):
+def check_qxpr_unbound(qxpr: Qxpression):
     try:
-        check_qxpr_unbound_recursive(qexpr, 0, set())
+        check_qxpr_unbound_recursive(qxpr, 0, set())
     except SchemeParserError as err:
         scheme_panic(str(err))
 
 
-def check_qxpr_unbound_pass(qexpr: Qxpression, depth: int, seen_variables: Set[str]):
+def check_qxpr_unbound_pass(qxpr: Qxpression, depth: int, seen_variables: Set[str]):
     pass
 
 
-def check_qxpr_unbound_var(qexpr: VarQxpr, depth: int, seen_variables: Set[str]):
-    name = qexpr.token.literal
+def check_qxpr_unbound_var(qxpr: VarQxpr, depth: int, seen_variables: Set[str]):
+    name = qxpr.token.literal
     if depth == 0:
         seen_variables.add(name)
     elif name not in seen_variables:
-        raise SchemeParserError(qexpr.token, 'unbound variable')
+        raise SchemeParserError(qxpr.token, 'unbound variable')
 
 
-def check_qxpr_unbound_list(qexpr: ListQxpr, depth: int, seen_variables: Set[str]):
-    for subqxpr in qexpr.contents:
+def check_qxpr_unbound_list(qxpr: ListQxpr, depth: int, seen_variables: Set[str]):
+    for subqxpr in qxpr.contents:
         check_qxpr_unbound_recursive(subqxpr, depth, seen_variables)
-    if qexpr.tail is not None:
-        check_qxpr_unbound_recursive(qexpr.tail, depth, seen_variables)
+    if qxpr.tail is not None:
+        check_qxpr_unbound_recursive(qxpr.tail, depth, seen_variables)
 
 
 def update_check_qxpr_unbound_rules(rules: Dict[Type, CheckUnboundFuncType]):
@@ -289,35 +321,35 @@ CheckVarFuncType = Callable[[GenericQxpr], bool]
 _check_qxpr_var_rules: Dict[Type, CheckVarFuncType] = {}
 
 
-def check_qxpr_var(qexpr: Qxpression):
+def check_qxpr_var(qxpr: Qxpression):
     try:
-        has_var = check_qxpr_var_recursive(qexpr)
+        has_var = check_qxpr_var_recursive(qxpr)
         if not has_var:
-            raise SchemeParserError(qexpr.token, 'no variable exist')
+            raise SchemeParserError(qxpr.token, 'no variable exist')
     except SchemeParserError as err:
         scheme_panic(str(err))
 
 
-def check_qxpr_var_recursive(qexpr: Qxpression):
-    t = find_type(type(qexpr), _check_qxpr_var_rules)
+def check_qxpr_var_recursive(qxpr: Qxpression):
+    t = find_type(type(qxpr), _check_qxpr_var_rules)
     f = _check_qxpr_var_rules[t]
-    return f(qexpr)
+    return f(qxpr)
 
 
-def check_qxpr_var_pass(qexpr: Qxpression):
+def check_qxpr_var_pass(qxpr: Qxpression):
     return False
 
 
-def check_qxpr_var_var(qexpr: VarQxpr):
+def check_qxpr_var_var(qxpr: VarQxpr):
     return True
 
 
-def check_qxpr_var_list(qexpr: ListQxpr):
-    for subqxpr in qexpr.contents:
+def check_qxpr_var_list(qxpr: ListQxpr):
+    for subqxpr in qxpr.contents:
         if check_qxpr_var_recursive(subqxpr):
             return True
-    if qexpr.tail is not None:
-        if check_qxpr_var_recursive(qexpr.tail):
+    if qxpr.tail is not None:
+        if check_qxpr_var_recursive(qxpr.tail):
             return True
     return False
 
@@ -433,44 +465,44 @@ ParsePatternFuncType = Callable[[GenericQxpr], Pattern]
 _parse_pattern_rules: Dict[Type, ParsePatternFuncType] = {}
 
 
-def parse_pattern(qexpr: Qxpression):
+def parse_pattern(qxpr: Qxpression):
     try:
-        return parse_pattern_recursive(qexpr)
+        return parse_pattern_recursive(qxpr)
     except SchemeParserError as err:
         scheme_panic(str(err))
 
 
-def parse_pattern_recursive(qexpr: Qxpression):
-    t = find_type(type(qexpr), _parse_pattern_rules)
+def parse_pattern_recursive(qxpr: Qxpression):
+    t = find_type(type(qxpr), _parse_pattern_rules)
     f = _parse_pattern_rules[t]
-    return f(qexpr)
+    return f(qxpr)
 
 
-def parse_pattern_string(qexpr: StringQxpr):
-    return StringPat(qexpr.token.literal)
+def parse_pattern_string(qxpr: StringQxpr):
+    return StringPat(qxpr.token.literal)
 
 
-def parse_pattern_number(qexpr: NumberQxpr):
-    return NumberPat(qexpr.token.literal)
+def parse_pattern_number(qxpr: NumberQxpr):
+    return NumberPat(qxpr.token.literal)
 
 
-def parse_pattern_boolean(qexpr: BooleanQxpr):
-    return BooleanPat(qexpr.token.literal)
+def parse_pattern_boolean(qxpr: BooleanQxpr):
+    return BooleanPat(qxpr.token.literal)
 
 
-def parse_pattern_symbol(qexpr: SymbolQxpr):
-    return SymbolPat(qexpr.token.literal)
+def parse_pattern_symbol(qxpr: SymbolQxpr):
+    return SymbolPat(qxpr.token.literal)
 
 
-def parse_pattern_var(qexpr: VarQxpr):
-    return VarPat(qexpr.token.literal, 0)
+def parse_pattern_var(qxpr: VarQxpr):
+    return VarPat(qxpr.token.literal, 0)
 
 
-def parse_pattern_list(qexpr: ListQxpr):
+def parse_pattern_list(qxpr: ListQxpr):
     fronts = [parse_pattern_recursive(subqxpr)
-              for subqxpr in qexpr.contents]
+              for subqxpr in qxpr.contents]
     last = parse_pattern_recursive(
-        qexpr.tail) if qexpr.tail is not None else NilPat()
+        qxpr.tail) if qxpr.tail is not None else NilPat()
     return pair_from_list_pattern(fronts, last)
 
 
@@ -1049,22 +1081,22 @@ def parse_compound_qxpr_and(combo: TokenList):
     return AndQxpr(combo.anchor, contents)
 
 
-def check_qxpr_forbid_and(qexpr: AndQxpr, forbid_types: List[Type]):
-    check_qxpr_forbid_self(qexpr, forbid_types)
-    for subqxpr in qexpr.contents:
+def check_qxpr_forbid_and(qxpr: AndQxpr, forbid_types: List[Type]):
+    check_qxpr_forbid_self(qxpr, forbid_types)
+    for subqxpr in qxpr.contents:
         check_qxpr_forbid_recursive(subqxpr, forbid_types)
 
 
-def check_qxpr_unbound_and(qexpr: AndQxpr, depth: int, seen_variables: Set[str]):
-    for subqxpr in qexpr.contents:
+def check_qxpr_unbound_and(qxpr: AndQxpr, depth: int, seen_variables: Set[str]):
+    for subqxpr in qxpr.contents:
         check_qxpr_unbound_recursive(subqxpr, depth, seen_variables)
 
 
-def check_qxpr_var_and(qexpr: AndQxpr):
+def check_qxpr_var_and(qxpr: AndQxpr):
     '''every content must have variable'''
-    for subqxpr in qexpr.contents:
+    for subqxpr in qxpr.contents:
         if not check_qxpr_var_recursive(subqxpr):
-            raise SchemeParserError(qexpr.token, 'no variable exist')
+            raise SchemeParserError(qxpr.token, 'no variable exist')
     return True
 
 
@@ -1073,9 +1105,9 @@ class AndPat(SpecialPat):
         self.contents = contents
 
 
-def parse_pattern_and(qexpr: AndQxpr):
+def parse_pattern_and(qxpr: AndQxpr):
     contents = [parse_pattern_recursive(subqxpr)
-                for subqxpr in qexpr.contents]
+                for subqxpr in qxpr.contents]
     return AndPat(contents)
 
 
@@ -1086,7 +1118,7 @@ def stringify_pattern_and(pat: AndPat):
 
 
 def install_special_form_and():
-    update_parse_special_qxpr_rules({'and': parse_compound_qxpr_and})
+    update_parse_qxpr_rules({'and': parse_compound_qxpr_and})
     update_check_qxpr_forbid_rules({AndQxpr: check_qxpr_forbid_and})
     update_check_qxpr_unbound_rules({AndQxpr: check_qxpr_unbound_and})
     update_check_qxpr_var_rules({AndQxpr: check_qxpr_var_and})
@@ -1111,22 +1143,22 @@ def parse_compound_qxpr_or(combo: TokenList):
     return OrQxpr(combo.anchor, contents)
 
 
-def check_qxpr_forbid_or(qexpr: OrQxpr, forbid_types: List[Type]):
-    check_qxpr_forbid_self(qexpr, forbid_types)
-    for subqxpr in qexpr.contents:
+def check_qxpr_forbid_or(qxpr: OrQxpr, forbid_types: List[Type]):
+    check_qxpr_forbid_self(qxpr, forbid_types)
+    for subqxpr in qxpr.contents:
         check_qxpr_forbid_recursive(subqxpr, forbid_types)
 
 
-def check_qxpr_unbound_or(qexpr: OrQxpr, depth: int, seen_variables: Set[str]):
-    for subqxpr in qexpr.contents:
+def check_qxpr_unbound_or(qxpr: OrQxpr, depth: int, seen_variables: Set[str]):
+    for subqxpr in qxpr.contents:
         check_qxpr_unbound_recursive(subqxpr, depth, seen_variables)
 
 
-def check_qxpr_var_or(qexpr: OrQxpr):
+def check_qxpr_var_or(qxpr: OrQxpr):
     '''every content must have variable'''
-    for subqxpr in qexpr.contents:
+    for subqxpr in qxpr.contents:
         if not check_qxpr_var_recursive(subqxpr):
-            raise SchemeParserError(qexpr.token, 'no variable exist')
+            raise SchemeParserError(qxpr.token, 'no variable exist')
     return True
 
 
@@ -1135,9 +1167,9 @@ class OrPat(SpecialPat):
         self.contents = contents
 
 
-def parse_pattern_or(qexpr: OrQxpr):
+def parse_pattern_or(qxpr: OrQxpr):
     contents = [parse_pattern_recursive(subqxpr)
-                for subqxpr in qexpr.contents]
+                for subqxpr in qxpr.contents]
     return OrPat(contents)
 
 
@@ -1148,7 +1180,7 @@ def stringify_pattern_or(pat: OrPat):
 
 
 def install_special_form_or():
-    update_parse_special_qxpr_rules({'or': parse_compound_qxpr_or})
+    update_parse_qxpr_rules({'or': parse_compound_qxpr_or})
     update_check_qxpr_forbid_rules({OrQxpr: check_qxpr_forbid_or})
     update_check_qxpr_unbound_rules({OrQxpr: check_qxpr_unbound_or})
     update_check_qxpr_var_rules({OrQxpr: check_qxpr_var_or})
@@ -1173,19 +1205,19 @@ def parse_compound_qxpr_not(combo: TokenList):
     return NotQxpr(combo.anchor, content)
 
 
-def check_qxpr_forbid_not(qexpr: NotQxpr, forbid_types: List[Type]):
-    check_qxpr_forbid_self(qexpr, forbid_types)
-    check_qxpr_forbid_recursive(qexpr.content, forbid_types)
+def check_qxpr_forbid_not(qxpr: NotQxpr, forbid_types: List[Type]):
+    check_qxpr_forbid_self(qxpr, forbid_types)
+    check_qxpr_forbid_recursive(qxpr.content, forbid_types)
 
 
-def check_qxpr_unbound_not(qexpr: NotQxpr, depth: int, seen_variables: Set[str]):
-    check_qxpr_unbound_recursive(qexpr.content, depth+1, seen_variables)
+def check_qxpr_unbound_not(qxpr: NotQxpr, depth: int, seen_variables: Set[str]):
+    check_qxpr_unbound_recursive(qxpr.content, depth+1, seen_variables)
 
 
-def check_qxpr_var_not(qexpr: NotQxpr):
+def check_qxpr_var_not(qxpr: NotQxpr):
     '''content must have variable'''
-    if not check_qxpr_var_recursive(qexpr.content):
-        raise SchemeParserError(qexpr.token, 'no variable exist')
+    if not check_qxpr_var_recursive(qxpr.content):
+        raise SchemeParserError(qxpr.token, 'no variable exist')
     return True
 
 
@@ -1194,8 +1226,8 @@ class NotPat(SpecialPat):
         self.content = content
 
 
-def parse_pattern_not(qexpr: NotQxpr):
-    content = parse_pattern_recursive(qexpr.content)
+def parse_pattern_not(qxpr: NotQxpr):
+    content = parse_pattern_recursive(qxpr.content)
     return NotPat(content)
 
 
@@ -1205,7 +1237,7 @@ def stringify_pattern_not(pat: NotPat):
 
 
 def install_special_form_not():
-    update_parse_special_qxpr_rules({'not': parse_compound_qxpr_not})
+    update_parse_qxpr_rules({'not': parse_compound_qxpr_not})
     update_check_qxpr_forbid_rules({NotQxpr: check_qxpr_forbid_not})
     update_check_qxpr_unbound_rules({NotQxpr: check_qxpr_unbound_not})
     update_check_qxpr_var_rules({NotQxpr: check_qxpr_var_not})
@@ -1224,7 +1256,7 @@ class PredQxpr(SpecialQxpr):
 
 
 def parse_compound_qxpr_pred(combo: TokenList):
-    '''notice operands can only be simple qexpressions'''
+    '''notice operands can only be simple qxpressions'''
     if len(combo.contents) < 3:
         raise SchemeParserError(
             combo.anchor, 'lisp-value special form need at least 3 terms')
@@ -1232,28 +1264,28 @@ def parse_compound_qxpr_pred(combo: TokenList):
         raise SchemeParserError(
             combo.anchor, 'lisp-value special form must have a symbolic operator name')
     operator = combo.contents[1].anchor
-    operands = [parse_simple_qexpr(subqxpr)
+    operands = [parse_simple_qxpr_recursive(subqxpr)
                 for subqxpr in combo.contents[2:]]
     return PredQxpr(combo.anchor, operator, operands)
 
 
-def check_qxpr_forbid_pred(qexpr: PredQxpr, forbid_types: List[Type]):
-    check_qxpr_forbid_self(qexpr, forbid_types)
-    for subqxpr in qexpr.operands:
+def check_qxpr_forbid_pred(qxpr: PredQxpr, forbid_types: List[Type]):
+    check_qxpr_forbid_self(qxpr, forbid_types)
+    for subqxpr in qxpr.operands:
         check_qxpr_forbid_recursive(subqxpr, forbid_types)
 
 
-def check_qxpr_unbound_pred(qexpr: PredQxpr, depth: int, seen_variables: Set[str]):
-    for subqxpr in qexpr.operands:
+def check_qxpr_unbound_pred(qxpr: PredQxpr, depth: int, seen_variables: Set[str]):
+    for subqxpr in qxpr.operands:
         check_qxpr_unbound_recursive(subqxpr, depth+1, seen_variables)
 
 
-def check_qxpr_var_pred(qexpr: PredQxpr):
+def check_qxpr_var_pred(qxpr: PredQxpr):
     '''at least on operand must have variable'''
-    for subqxpr in qexpr.operands:
+    for subqxpr in qxpr.operands:
         if check_qxpr_var_recursive(subqxpr):
             return True
-    raise SchemeParserError(qexpr.token, 'no variable exist')
+    raise SchemeParserError(qxpr.token, 'no variable exist')
 
 
 class PredPat(SpecialPat):
@@ -1262,10 +1294,10 @@ class PredPat(SpecialPat):
         self.operands = operands
 
 
-def parse_pattern_pred(qexpr: PredQxpr):
+def parse_pattern_pred(qxpr: PredQxpr):
     operands = [parse_pattern_recursive(subqxpr)
-                for subqxpr in qexpr.operands]
-    return PredPat(qexpr.operator.literal, operands)
+                for subqxpr in qxpr.operands]
+    return PredPat(qxpr.operator.literal, operands)
 
 
 def stringify_pattern_pred(pat: PredPat):
@@ -1275,7 +1307,7 @@ def stringify_pattern_pred(pat: PredPat):
 
 
 def install_special_form_pred():
-    update_parse_special_qxpr_rules(
+    update_parse_qxpr_rules(
         {'lisp-value': parse_compound_qxpr_pred})
     update_check_qxpr_forbid_rules({PredQxpr: check_qxpr_forbid_pred})
     update_check_qxpr_unbound_rules({PredQxpr: check_qxpr_unbound_pred})
@@ -1332,7 +1364,7 @@ def test_one(assertions_obj: SrcRes, rules_obj: SrcRes, query_objs: List[SrcRes]
             print('* assertions-source: %s' % assertions_source)
             assertions = read_all_assertions(assertions_source)
             assertions_str = '\n'.join(
-                [stringify_pattern(qpat) for qpat in assertions])
+                [stringify_pattern(pat) for pat in assertions])
             print('* assertions-parsed: %s' % assertions_str)
             if assertions_obj['result'] is not None:
                 assert assertions_str == assertions_obj['result']
