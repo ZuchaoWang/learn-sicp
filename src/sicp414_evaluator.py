@@ -131,6 +131,10 @@ class TokenTag(enum.Enum):
     ROOT = enum.auto()
 
 
+def make_root_token():
+    return Token(TokenTag.ROOT, 0, '', None)
+
+
 class Token:
     '''token is simple and relatively fixed, we won't use different classes'''
 
@@ -533,7 +537,7 @@ def parse_expr(combos: List[TokenCombo]):
             expressions.append(expr)
     except SchemeParserError as err:
         scheme_panic(str(err))
-    root_token = Token(TokenTag.ROOT, 0, '', None)
+    root_token = make_root_token()
     return SequenceExpr(root_token, expressions)
 
 

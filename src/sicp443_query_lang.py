@@ -10,7 +10,7 @@ it's the qpatterns that will be used for matching calculation
 '''
 
 from typing import Callable, Dict, List, Optional, Set, Type, TypeVar, TypedDict, Union
-from sicp414_evaluator import SchemePanic, SchemeParserError, Token, TokenCombo, TokenList, TokenLiteral, TokenQuote, TokenTag, find_type, format_bool, format_float, parse_tokens, scan_source, scheme_panic
+from sicp414_evaluator import SchemePanic, SchemeParserError, Token, TokenCombo, TokenList, TokenLiteral, TokenQuote, TokenTag, find_type, format_bool, format_float, make_root_token, parse_tokens, scan_source, scheme_panic
 
 
 class QExpression:
@@ -550,16 +550,22 @@ def parse_query(combo: TokenCombo):
     return pat
 
 
+def get_single_query(combos: List[TokenCombo]):
+    try:
+        if len(combos) != 1:
+            token = combos[-1].anchor if len(combos) > 1 else make_root_token()
+            raise SchemeParserError(token, 'should have exactly one query')
+        else:
+            return combos[0]
+    except SchemeParserError as err:
+        scheme_panic(str(err))
+
+
 def read_single_query(source: str):
     tokens = scan_source(source)
     combos = parse_tokens(tokens)
-    if len(combos) > 1:
-        raise SchemeParserError(
-            combos[-1].anchor, 'should have exactly one query')
-    elif len(combos) == 0:
-        root_token = Token(TokenTag.ROOT, 0, '', None)
-        raise SchemeParserError(root_token, 'should have exactly one query')
-    return parse_query(combos[0])
+    single_combo = get_single_query(combos)
+    return parse_query(single_combo)
 
 
 class QRule:
@@ -568,21 +574,31 @@ class QRule:
         self.body = body
 
 
+def get_qrule_contents(combo: TokenCombo):
+    try:
+        if not isinstance(combo, TokenList):
+            raise SchemeParserError(combo.anchor, 'rule should be a list')
+        if len(combo.contents) < 2 or len(combo.contents) > 3:
+            raise SchemeParserError(
+                combo.anchor, 'rule should be a list of 2 or 3 terms')
+        if combo.contents[0].anchor.tag != TokenTag.SYMBOL or combo.contents[0].anchor.lexeme != 'rule':
+            raise SchemeParserError(
+                combo.anchor, 'rule should begin with rule symbol')
+        concl_combo = combo.contents[1]
+        body_combo = combo.contents[2] if len(combo.contents) == 3 else None
+        return concl_combo, body_combo
+    except SchemeParserError as err:
+        scheme_panic(str(err))
+
+
 def parse_qrule(combo: TokenCombo):
-    if not isinstance(combo, TokenList):
-        raise SchemeParserError(combo.anchor, 'rule should be a list')
-    if len(combo.contents) < 2 or len(combo.contents) > 3:
-        raise SchemeParserError(
-            combo.anchor, 'rule should be a list of 2 or 3 terms')
-    if combo.contents[0].anchor.tag != TokenTag.SYMBOL or combo.contents[0].anchor.lexeme != 'rule':
-        raise SchemeParserError(
-            combo.anchor, 'rule should begin with rule symbol')
-    concl_qexpr = parse_qexpr(combo.contents[1])
+    concl_combo, body_combo = get_qrule_contents(combo)
+    concl_qexpr = parse_qexpr(concl_combo)
     check_qexpr_forbid(concl_qexpr, [SpecialQExpr])
     check_qexpr_var(concl_qexpr)
     concl_pat = parse_qpattern(concl_qexpr)
-    if len(combo.contents) == 3:
-        body_pat = parse_query(combo.contents[2])
+    if body_combo is not None:
+        body_pat = parse_query(body_combo)
     else:
         body_pat = EmptyQPat()
     return QRule(concl_pat, body_pat)
@@ -919,7 +935,7 @@ def make_src_res(**kargs: str) -> SrcRes:
         return {'source': '', 'result': None}
 
 
-def test_parse():
+def test_parse_assertions():
     test_one(
         assertions_obj=make_src_res(source='some-symbol'),
         qrules_obj=make_src_res(),
@@ -960,11 +976,159 @@ def test_parse():
         query_objs=[],
         panic=''
     )
+
+def test_parse_queries():
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(),
+        query_objs=[
+          make_src_res(
+            source='(salary   (Bitdiddle Ben) ?amount)',
+            result='(salary (Bitdiddle Ben) ?amount)'
+            )
+        ],
+        panic=''
+    )
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(),
+        query_objs=[
+          make_src_res(
+            source='(salary (Bitdiddle ?faimily-name) ?amount)',
+            result='(salary (Bitdiddle ?faimily-name) ?amount)'
+            )
+        ],
+        panic=''
+    )
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(),
+        query_objs=[
+          make_src_res(
+            source='''
+            (and (job ?name (computer wizard))
+            (salary ?name 60000))
+            ''',
+            result='(and (job ?name (computer wizard)) (salary ?name 60000))'
+            )
+        ],
+        panic=''
+    )
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(),
+        query_objs=[
+          make_src_res(
+            source='''
+            (and (job ?name (computer wizard))
+            (salary (Bitdiddle Ben) 60000))
+            '''
+            )
+        ],
+        panic='parser error at LEFT_PAREN in line 1: no variable exist'
+    )
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(),
+        query_objs=[
+          make_src_res(
+            source='(salary (Bitdiddle . ?rest-name) ?amount)',
+            result='(salary (Bitdiddle . ?rest-name) ?amount)'
+            )
+        ],
+        panic=''
+    )
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(),
+        query_objs=[
+          make_src_res(source='(salary (. ?name) ?amount)')
+        ],
+        panic='parser error at DOT in line 1: cannot have free or header dot within pattern'
+    )
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(),
+        query_objs=[
+          make_src_res(
+            source='''
+            (job (Bitdiddle Ben) (computer wizard))
+            (salary (Bitdiddle Ben) 60000)
+            '''
+            )
+        ],
+        panic='parser error at LEFT_PAREN in line 2: should have exactly one query'
+    )
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(),
+        query_objs=[
+          make_src_res(source='(job (Bitdiddle Ben) (computer wizard))')
+        ],
+        panic='parser error at LEFT_PAREN in line 1: no variable exist'
+    )
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(),
+        query_objs=[
+          make_src_res(
+            source='''
+            (and (job ?name (computer wizard))
+            (not (salary ?name ?amount)))
+            ''',
+            )
+        ],
+        panic='parser error at SYMBOL:?amount in line 2: unbound variable'
+    )
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(),
+        query_objs=[
+          make_src_res(
+            source='''
+            (and (job ?name (computer wizard))
+            (lisp-value > ?amount 10000))
+            ''',
+            )
+        ],
+        panic='parser error at SYMBOL:?amount in line 2: unbound variable'
+    )
     
+
+def test_parse_qrules():
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(source='(salary (Bitdiddle . ?rest-name) ?amount)'),
+        query_objs=[],
+        panic='parser error at LEFT_PAREN in line 1: rule should begin with rule symbol'
+    )
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(source='(rule () ())'),
+        query_objs=[],
+        panic='parser error at LEFT_PAREN in line 1: pattern should be non-empty list'
+    )
+    test_one(
+        assertions_obj=make_src_res(),
+        qrules_obj=make_src_res(
+          source='''
+          (rule (lives-near ?p-1 ?p-2)
+            (and (address ?p-1 (?town . ?rest-1)) (address ?p-2 (?town . ?rest-2))
+            (not (same ?p-1 ?p-2))))
+          (rule (same ?x ?x))
+          ''',
+          result='(rule (lives-near ?p-1 ?p-2) (and (address ?p-1 (?town . ?rest-1)) (address ?p-2 (?town . ?rest-2))' + \
+            ' (not (same ?p-1 ?p-2))))\n(rule (same ?x ?x) [empty])'
+        ),
+        query_objs=[],
+        panic=''
+    )
 
 
 def test():
-    test_parse()
+    test_parse_assertions()
+    test_parse_queries()
+    test_parse_qrules()
 
 
 if __name__ == '__main__':
