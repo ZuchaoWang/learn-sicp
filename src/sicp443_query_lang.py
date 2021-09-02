@@ -11,7 +11,8 @@ it's the qpatterns that will be used for matching calculation
 
 from typing import Callable, Dict, Generic, List, Optional, Set, Type, TypeVar, TypedDict, Union, cast
 from sicp331_cycle_detect import LinkedListNode
-from sicp414_evaluator import SchemePanic, SchemeParserError, Token, TokenCombo, TokenList, TokenLiteral, TokenQuote, TokenTag, find_type, format_bool, format_float, make_root_token, parse_tokens, scan_source, scheme_panic
+from sicp414_evaluator import SchemePanic, SchemeParserError, Token, TokenCombo, TokenList, TokenLiteral, TokenQuote, TokenTag, \
+    find_type, format_bool, format_float, make_root_token, parse_tokens, scan_source, scheme_panic
 
 
 class Qxpression:
@@ -146,7 +147,7 @@ def parse_simple_qxpr_literal(combo: TokenLiteral):
 def parse_simple_qxpr_list(combo: TokenList):
     if len(combo.contents) >= 2 and combo.contents[-2].anchor.tag == TokenTag.DOT:
         subqxprs = [parse_simple_qexpr(subcomb)
-                     for subcomb in combo.contents[:-2]]
+                    for subcomb in combo.contents[:-2]]
         lastqxpr = parse_simple_qexpr(combo.contents[-1])
         return ListQxpr(combo.anchor, subqxprs, lastqxpr)
     else:
@@ -794,6 +795,7 @@ def make_single_frame_stream(frame: Frame):
     s: FntStream[Frame] = FntStream(frame, None)
     return s
 
+
 def get_binding_value(frame: Frame, name: str):
     head = frame
     while head is not None:
@@ -807,10 +809,12 @@ def get_binding_value(frame: Frame, name: str):
 
 last_global_var_version = 0
 
+
 def get_next_global_var_version():
     global last_global_var_version
     last_global_var_version += 1
     return last_global_var_version
+
 
 RenamePatternFuncType = Callable[[GenericPat, int], Pattern]
 
@@ -826,14 +830,18 @@ def rename_pattern(pat: Pattern, version: int):
     f = _rename_pattern_rules[t]
     return f(pat, version)
 
+
 def rename_pattern_pass(pat: Pattern, version: int):
     return pat
+
 
 def rename_pattern_var(pat: VarPat, version: int):
     return VarPat(pat.name, version)
 
+
 def rename_pattern_pair(pat: PairPat, version: int):
     return PairPat(rename_pattern(pat.left, version), rename_pattern(pat.right, version))
+
 
 update_rename_pattern_rules({
     Pattern: rename_pattern_pass,
@@ -912,6 +920,7 @@ def depend_var_pattern_var(pat: VarPat, var: VarPat, frame: Frame):
     else:
         val = get_binding_value(frame, pat.name)
         return depend_var_pattern(val, var, frame)
+
 
 def depend_var_pattern_pair(pat: PairPat, var: VarPat, frame: Frame):
     return depend_var_pattern(pat.left, var, frame) or depend_var_pattern(pat.right, var, frame)
