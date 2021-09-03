@@ -1106,7 +1106,7 @@ def unify_match(pat1: SimplePat, pat2: SimplePat, frame: Frame) -> Optional[Fram
     '''
     unify_match recursively matches two patterns
     when one is var and has binding, then its bound value is used to match another
-    
+
     unify_match assumes both pat1 and pat2 can contain variable
     this covers the functionality of pattern_match, where only pat1 can contain variable
     therefore no need to implement another pattern_match
@@ -1335,11 +1335,11 @@ def qeval_or(query: OrPat, assertions: OptFntStream[SimplePat], rules: OptFntStr
         if start == len(query.contents):
             return None
         else:
-            headf = qeval_recursive(
+            headfs = qeval_recursive(
                 query.contents[start], assertions, rules, frames)
 
-            def restf_delayed(): return _qeval_or_from(start+1)
-            return stream_interleave_delayed(headf, restf_delayed)
+            def restfs_delayed(): return _qeval_or_from(start+1)
+            return stream_interleave_delayed(headfs, restfs_delayed)
     return _qeval_or_from(0)
 
 
@@ -1520,6 +1520,7 @@ def qeval_pred(query: PredPat, assertions: OptFntStream[SimplePat], rules: OptFn
                 query.operator, pred.arity, len(query.operands)))
 
         def _qeval_pred_filter(frame: Frame):
+            '''do not just use the variable, need to get the bound value'''
             return pred.body(*[get_deep_binding_value_recursive(frame, op) for op in query.operands])
         return stream_filter(_qeval_pred_filter, frames)
     except SchemePredError as err:
