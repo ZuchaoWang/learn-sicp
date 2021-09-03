@@ -517,7 +517,7 @@ def parse_pattern_symbol(qxpr: SymbolQxpr):
 
 
 def parse_pattern_var(qxpr: VarQxpr):
-    return VarPat(qxpr.token.literal, qxpr.token.literal)
+    return VarPat(qxpr.token.literal, 0)
 
 
 def parse_pattern_list(qxpr: ListQxpr):
@@ -844,7 +844,14 @@ class Binding:
         self.value = value
 
 
-Frame = Optional[LinkedListNode[Binding]]
+class Frame:
+    '''
+    frame cannot be a linked list of bindings, it must contain a linked list of bindings
+    if Frame = Optional[LinkedListNode[Binding]], then frame = None is ambiguous
+    frame = None can be both empty frame, or no frame
+    '''
+    def __init__(self, bindings: Optional[LinkedListNode[Binding]]):
+        self.bindings = bindings
 
 
 def make_single_frame_stream(frame: Frame):
@@ -855,12 +862,16 @@ def make_single_frame_stream(frame: Frame):
 
 def get_binding_value(frame: Frame, name: str, version: int):
     '''search in the linked list'''
-    head = frame
+    head = frame.bindings
     while head is not None:
         if head.data.name == name and head.data.version == version:
             return head.data.value
         head = head.next
     return None
+
+
+def extend_frame(frame: Frame, binding: Binding):
+    return Frame(LinkedListNode(binding, frame.bindings))
 
 
 '''
@@ -916,7 +927,7 @@ def resolve_final_frame(frame: Frame):
     get names of vars in original query, excluding those created in rule application (version > 0)
     then resolve these names and get the binding values
     '''
-    binding_ls = LinkedListNode.to_list(frame)
+    binding_ls = LinkedListNode.to_list(frame.bindings)
     binding_ls = [b for b in binding_ls if b.version == 0]
     return {b.name: resolve_binding_value(frame, b.name, b.version) for b in binding_ls}
 
@@ -1045,7 +1056,10 @@ def depend_var_pattern_var(pat: VarPat, var: VarPat, frame: Frame):
         return True
     else:
         val = get_binding_value(frame, pat.name, pat.version)
-        return depend_var_pattern(val, var, frame)
+        if val is not None:
+            return depend_var_pattern(val, var, frame)
+        else:
+            return False
 
 
 def depend_var_pattern_pair(pat: PairPat, var: VarPat, frame: Frame):
@@ -1073,7 +1087,7 @@ def qeval_recursive(query: GenericPat, assertions: OptFntStream[SimplePat], rule
 
 
 def qeval(query: GenericPat, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule]):
-    frames = make_single_frame_stream(None)
+    frames = make_single_frame_stream(Frame(None))
     return qeval_recursive(query, assertions, rules, frames)
 
 
@@ -1084,7 +1098,7 @@ def update_qeval_rules(rules: Dict[Type, QEvalRuleType]):
 '''simple query qeval'''
 
 
-def unify_match(pat1: SimplePat, pat2: SimplePat, frame: Frame) -> Frame:
+def unify_match(pat1: SimplePat, pat2: SimplePat, frame: Frame) -> Optional[Frame]:
     '''
     unify_match assumes both pat1 and pat2 can contain variable
     this covers the functionality of pattern_match, where only pat1 can contain variable
@@ -1103,7 +1117,7 @@ def unify_match(pat1: SimplePat, pat2: SimplePat, frame: Frame) -> Frame:
     return None
 
 
-def extend_if_possible(pat1: VarPat, pat2: SimplePat, frame: Frame) -> Frame:
+def extend_if_possible(pat1: VarPat, pat2: SimplePat, frame: Frame) -> Optional[Frame]:
     value1 = get_binding_value(frame, pat1.name, pat1.version)
     if value1 is not None:
         return unify_match(value1, pat2, frame)
@@ -1112,17 +1126,19 @@ def extend_if_possible(pat1: VarPat, pat2: SimplePat, frame: Frame) -> Frame:
         if value2 is not None:
             return unify_match(pat1, value2, frame)
         else:
-            return LinkedListNode(Binding(pat1.name, pat1.version, pat2), frame)
+            return extend_frame(frame, Binding(pat1.name, pat1.version, pat2))
     elif depend_var_pattern(pat2, pat1, frame):
         return None
     else:
-        return LinkedListNode(Binding(pat1.name, pat1.version, pat2), frame)
+        return extend_frame(frame, Binding(pat1.name, pat1.version, pat2))
 
 
 def find_assertions(query: SimplePat, assertions: OptFntStream[SimplePat], frame: Frame) -> OptFntStream[Frame]:
-    def _find_one_assertion(assertion: SimplePat) -> Frame:
-        return unify_match(query, assertion, frame)
-    return stream_map(_find_one_assertion, assertions)
+    def _find_one_assertion(assertion: SimplePat) -> OptFntStream[Frame]:
+        unify_res = unify_match(query, assertion, frame)
+        return make_single_frame_stream(unify_res) if unify_res is not None else None
+    frss = stream_map(_find_one_assertion, assertions)
+    return stream_flatten(frss)
 
 
 def rename_rule(rule: Rule) -> Rule:
@@ -1140,10 +1156,7 @@ def apply_rules(query: SimplePat, assertions: OptFntStream[SimplePat], rules: Op
     def _apply_one_rule(rule: Rule) -> OptFntStream[Frame]:
         rule_rn = rename_rule(rule)
         unify_res = unify_match(query, rule_rn.conclusion, frame)
-        if unify_res is None:
-            return None
-        else:
-            return qeval_recursive(rule_rn.body, assertions, rules, make_single_frame_stream(unify_res))
+        return qeval_recursive(rule_rn.body, assertions, rules, make_single_frame_stream(unify_res)) if unify_res is not None else None
     frss = stream_map(_apply_one_rule, rules)
     return stream_flatten(frss)
 
