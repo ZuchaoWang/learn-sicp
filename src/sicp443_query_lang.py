@@ -21,6 +21,9 @@ the qeval calculation largely follows the book, except that I don't implement pa
 I feel unify-match covers all the functionalities of pattern-match, so I just use unify-match
 the result of qeval is a stream of frames, I just print them like ?x=1 without doing full instantiation
 
+I will not try to detect the "marry loop" in exercise 4.67
+because this code is already very complex now
+
 the general code structure is that I first implement the simple query
 then add each special form: and, or, not, lisp-value
 finally do the testing
@@ -850,6 +853,7 @@ class Frame:
     if Frame = Optional[LinkedListNode[Binding]], then frame = None is ambiguous
     frame = None can be both empty frame, or no frame
     '''
+
     def __init__(self, bindings: Optional[LinkedListNode[Binding]]):
         self.bindings = bindings
 
@@ -860,7 +864,7 @@ def make_single_frame_stream(frame: Frame):
     return s
 
 
-def get_binding_value(frame: Frame, name: str, version: int):
+def get_shallow_binding_value(frame: Frame, name: str, version: int):
     '''search in the linked list'''
     head = frame.bindings
     while head is not None:
@@ -875,50 +879,50 @@ def extend_frame(frame: Frame, binding: Binding):
 
 
 '''
-resolve binding value, like a deep version of get_binding_value
+get deep binding value, like a deep version of get_shallow_binding_value
 when value is not constant, recursively resolve its value
 since binding can only contain simple value, we won't worry about special form
 '''
 
-ResolveBindingFuncType = Callable[[Frame, GenericSimplePat], SimplePat]
+GetDeepBindingFuncType = Callable[[Frame, GenericSimplePat], SimplePat]
 
-_resolve_binding_rules: Dict[Type, ResolveBindingFuncType] = {}
-
-
-def update_resolve_binding_rules(rules: Dict[Type, ResolveBindingFuncType]):
-    _resolve_binding_rules.update(rules)
+_get_deep_binding_rules: Dict[Type, GetDeepBindingFuncType] = {}
 
 
-def resolve_binding_value(frame: Frame, name: str, version: int):
-    shallow_value = get_binding_value(frame, name, version)
+def update_get_deep_binding_rules(rules: Dict[Type, GetDeepBindingFuncType]):
+    _get_deep_binding_rules.update(rules)
+
+
+def get_deep_binding_value(frame: Frame, name: str, version: int):
+    shallow_value = get_shallow_binding_value(frame, name, version)
     assert shallow_value is not None
-    return resolve_binding_value_recursive(frame, shallow_value)
+    return get_deep_binding_value_recursive(frame, shallow_value)
 
 
-def resolve_binding_value_recursive(frame: Frame, pat: GenericSimplePat):
-    t = find_type(type(pat), _resolve_binding_rules)
-    f = _resolve_binding_rules[t]
+def get_deep_binding_value_recursive(frame: Frame, pat: GenericSimplePat):
+    t = find_type(type(pat), _get_deep_binding_rules)
+    f = _get_deep_binding_rules[t]
     return f(frame, pat)
 
 
-def resolve_binding_value_pass(frame: Frame, pat: GenericSimplePat):
+def get_deep_binding_value_pass(frame: Frame, pat: GenericSimplePat):
     return pat
 
 
-def resolve_binding_value_pass_var(frame: Frame, pat: VarPat):
-    return resolve_binding_value(frame, pat.name, pat.version)
+def get_deep_binding_value_var(frame: Frame, pat: VarPat):
+    return get_deep_binding_value(frame, pat.name, pat.version)
 
 
-def resolve_binding_value_pair(frame: Frame, pat: PairPat):
-    left_value = resolve_binding_value_recursive(frame, pat.left)
-    right_value = resolve_binding_value_recursive(frame, pat.right)
+def get_deep_binding_value_pair(frame: Frame, pat: PairPat):
+    left_value = get_deep_binding_value_recursive(frame, pat.left)
+    right_value = get_deep_binding_value_recursive(frame, pat.right)
     return PairPat(left_value, right_value)
 
 
-update_resolve_binding_rules({
-    SimplePat: resolve_binding_value_pass,
-    VarPat: resolve_binding_value_pass_var,
-    PairPat: resolve_binding_value_pair
+update_get_deep_binding_rules({
+    SimplePat: get_deep_binding_value_pass,
+    VarPat: get_deep_binding_value_var,
+    PairPat: get_deep_binding_value_pair
 })
 
 
@@ -929,7 +933,7 @@ def resolve_final_frame(frame: Frame):
     '''
     binding_ls = LinkedListNode.to_list(frame.bindings)
     binding_ls = [b for b in binding_ls if b.version == 0]
-    return {b.name: resolve_binding_value(frame, b.name, b.version) for b in binding_ls}
+    return {b.name: get_deep_binding_value(frame, b.name, b.version) for b in binding_ls}
 
 
 '''rename variable, used in rule application'''
@@ -1055,7 +1059,7 @@ def depend_var_pattern_var(pat: VarPat, var: VarPat, frame: Frame):
     if is_equal_pattern_var(pat, var):
         return True
     else:
-        val = get_binding_value(frame, pat.name, pat.version)
+        val = get_shallow_binding_value(frame, pat.name, pat.version)
         if val is not None:
             return depend_var_pattern(val, var, frame)
         else:
@@ -1100,6 +1104,9 @@ def update_qeval_rules(rules: Dict[Type, QEvalRuleType]):
 
 def unify_match(pat1: SimplePat, pat2: SimplePat, frame: Frame) -> Optional[Frame]:
     '''
+    unify_match recursively matches two patterns
+    when one is var and has binding, then its bound value is used to match another
+    
     unify_match assumes both pat1 and pat2 can contain variable
     this covers the functionality of pattern_match, where only pat1 can contain variable
     therefore no need to implement another pattern_match
@@ -1118,11 +1125,11 @@ def unify_match(pat1: SimplePat, pat2: SimplePat, frame: Frame) -> Optional[Fram
 
 
 def extend_if_possible(pat1: VarPat, pat2: SimplePat, frame: Frame) -> Optional[Frame]:
-    value1 = get_binding_value(frame, pat1.name, pat1.version)
+    value1 = get_shallow_binding_value(frame, pat1.name, pat1.version)
     if value1 is not None:
         return unify_match(value1, pat2, frame)
     elif isinstance(pat2, VarPat):
-        value2 = get_binding_value(frame, pat2.name, pat2.version)
+        value2 = get_shallow_binding_value(frame, pat2.name, pat2.version)
         if value2 is not None:
             return unify_match(pat1, value2, frame)
         else:
@@ -1402,7 +1409,7 @@ def rename_pattern_not(pat: NotPat, version: int):
 
 def qeval_not(query: NotPat, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule], frames: OptFntStream[Frame]) -> OptFntStream[Frame]:
     def _qeval_not_filter(frame: Frame):
-        return qeval_recursive(query, assertions, rules, make_single_frame_stream(frame)) is None
+        return qeval_recursive(query.content, assertions, rules, make_single_frame_stream(frame)) is None
     return stream_filter(_qeval_not_filter, frames)
 
 
@@ -1513,7 +1520,7 @@ def qeval_pred(query: PredPat, assertions: OptFntStream[SimplePat], rules: OptFn
                 query.operator, pred.arity, len(query.operands)))
 
         def _qeval_pred_filter(frame: Frame):
-            return pred.body(*query.operands)
+            return pred.body(*[get_deep_binding_value_recursive(frame, op) for op in query.operands])
         return stream_filter(_qeval_pred_filter, frames)
     except SchemePredError as err:
         scheme_panic(str(err))
@@ -1590,16 +1597,19 @@ def stringify_rule(qrl: Rule):
 
 
 def stringify_result_frame(fs: OptFntStream[Frame], limit: int):
+    binding_strs: List[str] = []
     unq_binding_strs: Set[str] = set()
     while fs is not None and len(unq_binding_strs) < limit:
         f = fs.value()
         d = resolve_final_frame(f)
         keys = sorted(d.keys())
-        binding_str = '(%s)' % (', '.join(['%s=%s' % (k, stringify_pattern(d[k])) for k in keys]))
+        binding_str = ', '.join(
+            ['%s=%s' % (k, stringify_pattern(d[k])) for k in keys])
         if binding_str not in unq_binding_strs:
             unq_binding_strs.add(binding_str)
-    return ' '.join(sorted(list(unq_binding_strs)))
-
+            binding_strs.append(binding_str)
+        fs = fs.next()
+    return '\n'.join(binding_strs)
 
 
 def test_one(assertions_obj: SrcParRes, rules_obj: SrcParRes, query_objs: List[SrcParRes], panic: str):
@@ -1642,7 +1652,7 @@ def test_one(assertions_obj: SrcParRes, rules_obj: SrcParRes, query_objs: List[S
             if query_obj['parsed'] is not None:
                 assert query_str == query_obj['parsed']
             result = qeval(query, assertion_stream, rule_stream)
-            result_str = stringify_result_frame(result, 3)
+            result_str = stringify_result_frame(result, 5)
             print('* query-result: %s' % result_str)
             if query_obj['result'] is not None:
                 assert result_str == query_obj['result']
@@ -1680,7 +1690,8 @@ def test_parse_assertions():
         panic='parser error at LEFT_PAREN in line 1: pattern should be non-empty list'
     )
     test_one(
-        assertions_obj=make_src_par_res(source='(salary (Bitdiddle Ben) ?amount)'),
+        assertions_obj=make_src_par_res(
+            source='(salary (Bitdiddle Ben) ?amount)'),
         rules_obj=make_src_par_res(),
         query_objs=[],
         panic='parser error at SYMBOL:?amount in line 1: pattern type VarQxpr forbidden'
@@ -1872,7 +1883,8 @@ def test_parse_undetected():
         panic=''
     )
 
-def test_qeval_pattern():
+
+def test_qeval_append():
     '''see chap 4.4.1 logic as programming'''
     test_one(
         assertions_obj=make_src_par_res(),
@@ -1886,7 +1898,130 @@ def test_qeval_pattern():
         query_objs=[
             make_src_par_res(
                 source='(append-to-form (a b) (c d) ?z)',
-                result='(?z=(a b c d))'
+                result='?z=(a b c d)'
+            ),
+            make_src_par_res(
+                source='(append-to-form (a b) ?y (a b c d))',
+                result='?y=(c d)'
+            ),
+            make_src_par_res(
+                source='(append-to-form ?x ?y (a b c d))',
+                result='?x=(), ?y=(a b c d)\n?x=(a), ?y=(b c d)\n?x=(a b), ?y=(c d)\n?x=(a b c), ?y=(d)\n?x=(a b c d), ?y=()'
+            )
+        ],
+        panic=''
+    )
+
+
+def test_qeval_database():
+    '''see chap 4.4.1 a sample database'''
+    test_one(
+        assertions_obj=make_src_par_res(
+            source='''
+            (address (Bitdiddle Ben) (Slumerville (Ridge Road) 10))
+            (job (Bitdiddle Ben) (computer wizard))
+            (salary (Bitdiddle Ben) 60000)
+            (supervisor (Bitdiddle Ben) (Warbucks Oliver))
+
+            (address (Hacker Alyssa P) (Cambridge (Mass Ave) 78))
+            (job (Hacker Alyssa P) (computer programmer))
+            (salary (Hacker Alyssa P) 40000)
+            (supervisor (Hacker Alyssa P) (Bitdiddle Ben))
+
+            (address (Fect Cy D) (Cambridge (Ames Street) 3))
+            (job (Fect Cy D) (computer programmer))
+            (salary (Fect Cy D) 35000)
+            (supervisor (Fect Cy D) (Bitdiddle Ben))
+
+            (address (Tweakit Lem E) (Boston (Bay State Road) 22))
+            (job (Tweakit Lem E) (computer technician))
+            (salary (Tweakit Lem E) 25000)
+            (supervisor (Tweakit Lem E) (Bitdiddle Ben))
+
+            (address (Reasoner Louis) (Slumerville (Pine Tree Road) 80))
+            (job (Reasoner Louis) (computer programmer trainee))
+            (salary (Reasoner Louis) 30000)
+            (supervisor (Reasoner Louis) (Hacker Alyssa P))
+
+            (address (Warbucks Oliver) (Swellesley (Top Heap Road)))
+            (job (Warbucks Oliver) (administration big wheel))
+            (salary (Warbucks Oliver) 150000)
+
+            (address (Scrooge Eben) (Weston (Shady Lane) 10))
+            (job (Scrooge Eben) (accounting chief accountant))
+            (salary (Scrooge Eben) 75000)
+            (supervisor (Scrooge Eben) (Warbucks Oliver))
+
+            (address (Cratchet Robert) (Allston (N Harvard Street) 16))
+            (job (Cratchet Robert) (accounting scrivener))
+            (salary (Cratchet Robert) 18000)
+            (supervisor (Cratchet Robert) (Scrooge Eben))
+
+            (address (Aull DeWitt) (Slumerville (Onion Square) 5))
+            (job (Aull DeWitt) (administration secretary))
+            (salary (Aull DeWitt) 25000)
+            (supervisor (Aull DeWitt) (Warbucks Oliver))
+
+            (can-do-job (computer wizard) (computer programmer))
+            (can-do-job (computer wizard) (computer technician))
+            (can-do-job (computer programmer) (computer programmer trainee))
+            (can-do-job (administration secretary) (administration big wheel))
+            '''
+        ),
+        rules_obj=make_src_par_res(
+            source='''
+            (rule (lives-near ?person-1 ?person-2)
+              (and (address ?person-1 (?town . ?rest-1))
+                (address ?person-2 (?town . ?rest-2))
+                (not (same ?person-1 ?person-2))))
+            (rule (same ?x ?x))
+
+            (rule (wheel ?person)
+              (and (supervisor ?middle-manager ?person)
+                (supervisor ?x ?middle-manager)))
+            '''
+        ),
+        query_objs=[
+            make_src_par_res(
+                source='(job ?x (computer programmer))',
+                result='?x=(Hacker Alyssa P)\n?x=(Fect Cy D)'
+            ),
+            make_src_par_res(
+                source='(job ?x (computer . ?type))',
+                result='?type=(wizard), ?x=(Bitdiddle Ben)\n' +
+                '?type=(programmer), ?x=(Hacker Alyssa P)\n' +
+                '?type=(programmer), ?x=(Fect Cy D)\n' +
+                '?type=(technician), ?x=(Tweakit Lem E)\n' +
+                '?type=(programmer trainee), ?x=(Reasoner Louis)'
+            ),
+            make_src_par_res(
+                source='(and (job ?person (computer programmer)) (address ?person ?where))',
+                result='?person=(Hacker Alyssa P), ?where=(Cambridge (Mass Ave) 78)\n' +
+                '?person=(Fect Cy D), ?where=(Cambridge (Ames Street) 3)'
+            ),
+            make_src_par_res(
+                source='(or (supervisor ?x (Bitdiddle Ben)) (supervisor ?x (Hacker Alyssa P)))',
+                result='?x=(Hacker Alyssa P)\n?x=(Reasoner Louis)\n?x=(Fect Cy D)\n?x=(Tweakit Lem E)'
+            ),
+            make_src_par_res(
+                source='(and (supervisor ?x (Bitdiddle Ben)) (not (job ?x (computer programmer))))',
+                result='?x=(Tweakit Lem E)'
+            ),
+            make_src_par_res(
+                source='(and (salary ?person ?amount) (lisp-value > ?amount 70000))',
+                result='?amount=150000, ?person=(Warbucks Oliver)\n?amount=75000, ?person=(Scrooge Eben)'
+            ),
+            make_src_par_res(
+                source='(lives-near ?x (Bitdiddle Ben))',
+                result='?x=(Reasoner Louis)\n?x=(Aull DeWitt)'
+            ),
+            make_src_par_res(
+                source='(and (job ?x (computer . ?type)) (lives-near ?x (Bitdiddle Ben)))',
+                result='?type=(programmer trainee), ?x=(Reasoner Louis)'
+            ),
+            make_src_par_res(
+                source='(and (wheel ?x) (salary ?x ?amount) (not (lisp-value > ?amount 70000)) (lives-near ?x ?y))',
+                result='?amount=60000, ?x=(Bitdiddle Ben), ?y=(Reasoner Louis)\n?amount=60000, ?x=(Bitdiddle Ben), ?y=(Aull DeWitt)'
             )
         ],
         panic=''
@@ -1899,7 +2034,8 @@ def test():
     test_parse_queries()
     test_parse_rules()
     test_parse_undetected()
-    test_qeval_pattern()
+    test_qeval_append()
+    test_qeval_database()
 
 
 if __name__ == '__main__':
