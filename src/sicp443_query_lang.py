@@ -8,6 +8,10 @@ after that token combos are converted into qxpressions (query-expression), and s
 qxpression contains token information, so that failed grammar checks can refer to tokens in the source code
 after that qxpressions are converted to patterns where tokens are stripped off
 
+even with all these checking in qxpressions, we are still missing some erros:
+1) when parsed within simple qxpression, and/or/not/lisp-value may be mistakenly considered as normal symbol, not keyword
+2) lisp-value predicate related error are reported at runtime
+
 the qeval (query evaluation) takes query, assertions, rules and an initial empty frame as input
 where query and assertion are represented directly as patterns
 rule is represented as conclusion pattern and body pattern
@@ -22,6 +26,7 @@ then add each special form: and, or, not, lisp-value
 finally do the testing
 '''
 
+import inspect
 from typing import Callable, Dict, Generic, List, Optional, Set, Type, TypeVar, TypedDict, Union, cast
 from sicp331_cycle_detect import LinkedListNode
 from sicp414_evaluator import SchemePanic, SchemeParserError, Token, TokenCombo, TokenList, TokenLiteral, TokenQuote, TokenTag, \
@@ -51,6 +56,7 @@ class SimpleQxpr(Qxpression):
     e.g. ListQxpr can only contain SimpleQxpr
     e.g. rule conclusion can only be SimpleQxpr 
     '''
+
     def __init__(self, token: Token):
         super().__init__(token)
 
@@ -172,7 +178,8 @@ def parse_simple_qxpr_list(combo: TokenList):
         lastqxpr = parse_simple_qxpr_recursive(combo.contents[-1])
         return ListQxpr(combo.anchor, subqxprs, lastqxpr)
     else:
-        subqxprs = [parse_simple_qxpr_recursive(subcomb) for subcomb in combo.contents]
+        subqxprs = [parse_simple_qxpr_recursive(
+            subcomb) for subcomb in combo.contents]
         return ListQxpr(combo.anchor, subqxprs, None)
 
 
@@ -183,11 +190,17 @@ def parse_simple_qxpr_recursive(combo: TokenCombo) -> SimpleQxpr:
         assert isinstance(combo, TokenList)
         return parse_simple_qxpr_list(combo)
 
-
-def parse_simple_qxpr(combo: TokenCombo) -> ListQxpr:
-    check_combo_valid_qxpr(combo)
-    assert isinstance(combo, TokenList)
-    return parse_simple_qxpr_list(combo)
+# we cannot use this to directly parse assertion or query
+# otherwise it will simply consider special form keyword (and, or, not, lisp-value) as simple symbol
+# we must have knowledge of special form
+#
+# def parse_simple_qxpr(combo: TokenCombo):
+#     try:
+#         check_combo_valid_qxpr(combo)
+#         assert isinstance(combo, TokenList)
+#         return parse_simple_qxpr_list(combo)
+#     except SchemeParserError as err:
+#         scheme_panic(str(err))
 
 
 ParseQxprRuleType = Callable[[TokenList], SpecialQxpr]
@@ -217,7 +230,7 @@ def update_parse_qxpr_rules(rules: Dict[str, ParseQxprRuleType]):
 
 
 '''
-in some occassion types, an expression forbids certain types of sub-epxression
+in some occassions, an expression forbids certain types of sub-epxression
 e.g. assertion cannot have var and special form
 e.g. rule-conclusion cannot have special form
 check_qxpr_forbid checks this, and will raise error if violated
@@ -228,20 +241,20 @@ CheckForbidFuncType = Callable[[GenericQxpr, List[Type]], None]
 _check_qxpr_forbid_rules: Dict[Type, CheckForbidFuncType] = {}
 
 
-def check_qxpr_forbid(qxpr: Qxpression, forbid_types: List[Type]):
+def check_qxpr_forbid(qxpr: GenericQxpr, forbid_types: List[Type]):
     try:
         check_qxpr_forbid_recursive(qxpr, forbid_types)
     except SchemeParserError as err:
         scheme_panic(str(err))
 
 
-def check_qxpr_forbid_recursive(qxpr: Qxpression, forbid_types: List[Type]):
+def check_qxpr_forbid_recursive(qxpr: GenericQxpr, forbid_types: List[Type]):
     t = find_type(type(qxpr), _check_qxpr_forbid_rules)
     f = _check_qxpr_forbid_rules[t]
     f(qxpr, forbid_types)
 
 
-def check_qxpr_forbid_self(qxpr: Qxpression, forbid_types: List[Type]):
+def check_qxpr_forbid_self(qxpr: GenericQxpr, forbid_types: List[Type]):
     for ft in forbid_types:
         if isinstance(qxpr, ft):
             raise SchemeParserError(
@@ -265,27 +278,32 @@ update_check_qxpr_forbid_rules({
     ListQxpr: check_qxpr_forbid_list,
 })
 
-'''check certain expression can not have unbounded vars, e.g. not and lisp-value'''
+'''
+certain expression can not have unbounded vars, e.g. not and lisp-value
+seen_variables are all variables seen in previous expressions
+each not and lisp-value add depth by 1, depth > 0 means we cannot have unbounded var
+i.e. variables not in seen_variables
+'''
 
 CheckUnboundFuncType = Callable[[GenericQxpr, int, Set[str]], None]
 
 _check_qxpr_unbound_rules: Dict[Type, CheckUnboundFuncType] = {}
 
 
-def check_qxpr_unbound_recursive(qxpr: Qxpression, depth: int, seen_variables: Set[str]):
+def check_qxpr_unbound_recursive(qxpr: GenericQxpr, depth: int, seen_variables: Set[str]):
     t = find_type(type(qxpr), _check_qxpr_unbound_rules)
     f = _check_qxpr_unbound_rules[t]
     f(qxpr, depth, seen_variables)
 
 
-def check_qxpr_unbound(qxpr: Qxpression):
+def check_qxpr_unbound(qxpr: GenericQxpr):
     try:
         check_qxpr_unbound_recursive(qxpr, 0, set())
     except SchemeParserError as err:
         scheme_panic(str(err))
 
 
-def check_qxpr_unbound_pass(qxpr: Qxpression, depth: int, seen_variables: Set[str]):
+def check_qxpr_unbound_pass(qxpr: GenericQxpr, depth: int, seen_variables: Set[str]):
     pass
 
 
@@ -314,14 +332,14 @@ update_check_qxpr_unbound_rules({
     ListQxpr: check_qxpr_unbound_list,
 })
 
-'''check there exist some var in rule and query'''
+'''there must be some var in rule and query'''
 
 CheckVarFuncType = Callable[[GenericQxpr], bool]
 
 _check_qxpr_var_rules: Dict[Type, CheckVarFuncType] = {}
 
 
-def check_qxpr_var(qxpr: Qxpression):
+def check_qxpr_var(qxpr: GenericQxpr):
     try:
         has_var = check_qxpr_var_recursive(qxpr)
         if not has_var:
@@ -330,13 +348,13 @@ def check_qxpr_var(qxpr: Qxpression):
         scheme_panic(str(err))
 
 
-def check_qxpr_var_recursive(qxpr: Qxpression):
+def check_qxpr_var_recursive(qxpr: GenericQxpr):
     t = find_type(type(qxpr), _check_qxpr_var_rules)
     f = _check_qxpr_var_rules[t]
     return f(qxpr)
 
 
-def check_qxpr_var_pass(qxpr: Qxpression):
+def check_qxpr_var_pass(qxpr: GenericQxpr):
     return False
 
 
@@ -345,6 +363,7 @@ def check_qxpr_var_var(qxpr: VarQxpr):
 
 
 def check_qxpr_var_list(qxpr: ListQxpr):
+    '''list only need to have var in one of its children expression'''
     for subqxpr in qxpr.contents:
         if check_qxpr_var_recursive(subqxpr):
             return True
@@ -364,7 +383,7 @@ update_check_qxpr_var_rules({
     ListQxpr: check_qxpr_var_list,
 })
 
-'''patterns'''
+'''pattern is runtime object like values'''
 
 
 class Pattern:
@@ -384,6 +403,9 @@ class SimplePat(Pattern):
     can exist in frame
     '''
     pass
+
+
+GenericSimplePat = TypeVar("GenericSimplePat", bound=SimplePat)
 
 
 class StringPat(SimplePat):
@@ -465,14 +487,14 @@ ParsePatternFuncType = Callable[[GenericQxpr], Pattern]
 _parse_pattern_rules: Dict[Type, ParsePatternFuncType] = {}
 
 
-def parse_pattern(qxpr: Qxpression):
+def parse_pattern(qxpr: GenericQxpr):
     try:
         return parse_pattern_recursive(qxpr)
     except SchemeParserError as err:
         scheme_panic(str(err))
 
 
-def parse_pattern_recursive(qxpr: Qxpression):
+def parse_pattern_recursive(qxpr: GenericQxpr):
     t = find_type(type(qxpr), _parse_pattern_rules)
     f = _parse_pattern_rules[t]
     return f(qxpr)
@@ -495,7 +517,7 @@ def parse_pattern_symbol(qxpr: SymbolQxpr):
 
 
 def parse_pattern_var(qxpr: VarQxpr):
-    return VarPat(qxpr.token.literal, 0)
+    return VarPat(qxpr.token.literal, qxpr.token.literal)
 
 
 def parse_pattern_list(qxpr: ListQxpr):
@@ -519,7 +541,7 @@ update_parse_pattern_rules({
     ListQxpr: parse_pattern_list,
 })
 
-'''stringify patterns'''
+'''stringify patterns, very similar to stringify values'''
 
 StringifyPatternFuncType = Callable[[GenericPat], str]
 
@@ -530,7 +552,7 @@ def update_stringify_pattern_rules(rules: Dict[Type, StringifyPatternFuncType]):
     _stringify_pattern_rules.update(rules)
 
 
-def stringify_pattern(pat: Pattern):
+def stringify_pattern(pat: GenericPat):
     t = find_type(type(pat), _stringify_pattern_rules)
     f = _stringify_pattern_rules[t]
     return f(pat)
@@ -590,10 +612,10 @@ update_stringify_pattern_rules({
 
 def parse_assertion(combo: TokenCombo):
     qxpr = parse_qxpr(combo)
-    check_qxpr_forbid(qxpr, [VarQxpr, SpecialQxpr])
-    qxpr = cast(SimpleQxpr, qxpr)
+    check_qxpr_forbid(qxpr, [SpecialQxpr, VarQxpr])
+    assert isinstance(qxpr, ListQxpr)
     pat = parse_pattern(qxpr)
-    pat = cast(SimplePat, pat)
+    assert isinstance(pat, SimplePat)
     return pat
 
 
@@ -657,10 +679,10 @@ def parse_rule(combo: TokenCombo):
     concl_combo, body_combo = get_rule_contents(combo)
     concl_qxpr = parse_qxpr(concl_combo)
     check_qxpr_forbid(concl_qxpr, [SpecialQxpr])
+    assert isinstance(concl_qxpr, ListQxpr)
     check_qxpr_var(concl_qxpr)
-    concl_qxpr = cast(SimpleQxpr, concl_qxpr)
     concl_pat = parse_pattern(concl_qxpr)
-    concl_pat = cast(SimplePat, concl_pat)
+    assert isinstance(concl_pat, SimplePat)
     if body_combo is not None:
         body_pat = parse_query(body_combo)
     else:
@@ -770,6 +792,7 @@ S = TypeVar('S')
 
 
 def stream_map(proc: Callable[[T], S], s: OptFntStream[T]):
+    '''this map only assumes one input stream'''
     if s is None:
         return None
     else:
@@ -799,7 +822,7 @@ we choose to ignore these assumptions, therefore not building the index
 '''
 
 
-def make_assertion_stream(assertions: List[SimplePat]):
+def make_assertion_stream(assertions: List[PairPat]):
     return stream_from_list(assertions)
 
 
@@ -815,8 +838,9 @@ linked list allow sharing common parent frame via tail chain
 
 
 class Binding:
-    def __init__(self, name: str, value: SimplePat):
+    def __init__(self, name: str, version: int, value: SimplePat):
         self.name = name
+        self.version = version
         self.value = value
 
 
@@ -824,20 +848,80 @@ Frame = Optional[LinkedListNode[Binding]]
 
 
 def make_single_frame_stream(frame: Frame):
+    '''called singleton-stream in the book'''
     s: FntStream[Frame] = FntStream(frame, None)
     return s
 
 
-def get_binding_value(frame: Frame, name: str):
+def get_binding_value(frame: Frame, name: str, version: int):
+    '''search in the linked list'''
     head = frame
     while head is not None:
-        if head.data.name == name:
+        if head.data.name == name and head.data.version == version:
             return head.data.value
         head = head.next
     return None
 
 
-'''rename variable'''
+'''
+resolve binding value, like a deep version of get_binding_value
+when value is not constant, recursively resolve its value
+since binding can only contain simple value, we won't worry about special form
+'''
+
+ResolveBindingFuncType = Callable[[Frame, GenericSimplePat], SimplePat]
+
+_resolve_binding_rules: Dict[Type, ResolveBindingFuncType] = {}
+
+
+def update_resolve_binding_rules(rules: Dict[Type, ResolveBindingFuncType]):
+    _resolve_binding_rules.update(rules)
+
+
+def resolve_binding_value(frame: Frame, name: str, version: int):
+    shallow_value = get_binding_value(frame, name, version)
+    assert shallow_value is not None
+    return resolve_binding_value_recursive(frame, shallow_value)
+
+
+def resolve_binding_value_recursive(frame: Frame, pat: GenericSimplePat):
+    t = find_type(type(pat), _resolve_binding_rules)
+    f = _resolve_binding_rules[t]
+    return f(frame, pat)
+
+
+def resolve_binding_value_pass(frame: Frame, pat: GenericSimplePat):
+    return pat
+
+
+def resolve_binding_value_pass_var(frame: Frame, pat: VarPat):
+    return resolve_binding_value(frame, pat.name, pat.version)
+
+
+def resolve_binding_value_pair(frame: Frame, pat: PairPat):
+    left_value = resolve_binding_value_recursive(frame, pat.left)
+    right_value = resolve_binding_value_recursive(frame, pat.right)
+    return PairPat(left_value, right_value)
+
+
+update_resolve_binding_rules({
+    SimplePat: resolve_binding_value_pass,
+    VarPat: resolve_binding_value_pass_var,
+    PairPat: resolve_binding_value_pair
+})
+
+
+def resolve_final_frame(frame: Frame):
+    '''
+    get names of vars in original query, excluding those created in rule application (version > 0)
+    then resolve these names and get the binding values
+    '''
+    binding_ls = LinkedListNode.to_list(frame)
+    binding_ls = [b for b in binding_ls if b.version == 0]
+    return {b.name: resolve_binding_value(frame, b.name, b.version) for b in binding_ls}
+
+
+'''rename variable, used in rule application'''
 
 last_global_var_version = 0
 
@@ -848,7 +932,7 @@ def get_next_global_var_version():
     return last_global_var_version
 
 
-RenamePatternFuncType = Callable[[GenericPat, int], Pattern]
+RenamePatternFuncType = Callable[[GenericPat, int], GenericPat]
 
 _rename_pattern_rules: Dict[Type, RenamePatternFuncType] = {}
 
@@ -857,13 +941,14 @@ def update_rename_pattern_rules(rules: Dict[Type, RenamePatternFuncType]):
     _rename_pattern_rules.update(rules)
 
 
-def rename_pattern(pat: Pattern, version: int):
+def rename_pattern(pat: GenericPat, version: int):
+    assert version > 0
     t = find_type(type(pat), _rename_pattern_rules)
     f = _rename_pattern_rules[t]
     return f(pat, version)
 
 
-def rename_pattern_pass(pat: Pattern, version: int):
+def rename_pattern_pass(pat: GenericPat, version: int):
     return pat
 
 
@@ -892,7 +977,7 @@ def update_is_equal_pattern_rules(rules: Dict[Type, IsEqualPatternFuncType]):
     _is_equal_pattern_rules.update(rules)
 
 
-def is_equal_pattern(pat1: Pattern, pat2: Pattern):
+def is_equal_pattern(pat1: GenericPat, pat2: GenericPat):
     if type(pat1) == type(pat2):
         t = find_type(type(pat1), _is_equal_pattern_rules)
         f = _is_equal_pattern_rules[t]
@@ -900,7 +985,7 @@ def is_equal_pattern(pat1: Pattern, pat2: Pattern):
     return False
 
 
-def is_equal_pattern_ref(pat1: Pattern, pat2: Pattern):
+def is_equal_pattern_ref(pat1: GenericPat, pat2: GenericPat):
     return pat1 == pat2
 
 
@@ -916,6 +1001,10 @@ def is_equal_pattern_var(pat1: VarPat, pat2: VarPat):
     return pat1.name == pat2.name and pat1.version == pat2.version
 
 
+def is_equal_pattern_true(pat1: GenericPat, pat2: GenericPat):
+    return True
+
+
 update_is_equal_pattern_rules({
     Pattern: is_equal_pattern_ref,
     SymbolPat: is_equal_pattern_name,
@@ -923,11 +1012,16 @@ update_is_equal_pattern_rules({
     NumberPat: is_equal_pattern_value,
     BooleanPat: is_equal_pattern_value,
     VarPat: is_equal_pattern_var,
+    NilPat: is_equal_pattern_true,
+    EmptyPat: is_equal_pattern_true,
 })
 
-'''check pattern dependence'''
+'''
+check pattern dependence
+since this is only used in extend_if_possible, which only deals with simple value, we won't worry about special form
+'''
 
-DependVarPatternFuncType = Callable[[GenericPat, VarPat, Frame], bool]
+DependVarPatternFuncType = Callable[[GenericSimplePat, VarPat, Frame], bool]
 
 _depend_var_pattern_rules: Dict[Type, DependVarPatternFuncType] = {}
 
@@ -936,13 +1030,13 @@ def update_depend_var_pattern_rules(rules: Dict[Type, DependVarPatternFuncType])
     _depend_var_pattern_rules.update(rules)
 
 
-def depend_var_pattern(pat: Pattern, var: VarPat, frame: Frame):
+def depend_var_pattern(pat: GenericSimplePat, var: VarPat, frame: Frame):
     t = find_type(type(pat), _depend_var_pattern_rules)
     f = _depend_var_pattern_rules[t]
     return f(pat, var, frame)
 
 
-def depend_var_pattern_pass(pat: Pattern, var: VarPat, frame: Frame):
+def depend_var_pattern_pass(pat: GenericSimplePat, var: VarPat, frame: Frame):
     return False
 
 
@@ -950,7 +1044,7 @@ def depend_var_pattern_var(pat: VarPat, var: VarPat, frame: Frame):
     if is_equal_pattern_var(pat, var):
         return True
     else:
-        val = get_binding_value(frame, pat.name)
+        val = get_binding_value(frame, pat.name, pat.version)
         return depend_var_pattern(val, var, frame)
 
 
@@ -964,21 +1058,21 @@ update_depend_var_pattern_rules({
     PairPat: depend_var_pattern_pair
 })
 
-'''qeval'''
+'''qeval, this is the core of the whole query language'''
 
-QEvalRuleType = Callable[[Pattern, OptFntStream[SimplePat],
+QEvalRuleType = Callable[[GenericPat, OptFntStream[SimplePat],
                           OptFntStream[Rule], OptFntStream[Frame]], OptFntStream[Frame]]
 
 _qeval_rules: Dict[Type, QEvalRuleType] = {}
 
 
-def qeval_recursive(query: Pattern, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule], frames: OptFntStream[Frame]):
+def qeval_recursive(query: GenericPat, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule], frames: OptFntStream[Frame]):
     t = find_type(type(query), _qeval_rules)
     f = _qeval_rules[t]
     return f(query, assertions, rules, frames)
 
 
-def qeval(query: Pattern, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule]):
+def qeval(query: GenericPat, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule]):
     frames = make_single_frame_stream(None)
     return qeval_recursive(query, assertions, rules, frames)
 
@@ -991,7 +1085,11 @@ def update_qeval_rules(rules: Dict[Type, QEvalRuleType]):
 
 
 def unify_match(pat1: SimplePat, pat2: SimplePat, frame: Frame) -> Frame:
-    '''this includes pattern match'''
+    '''
+    unify_match assumes both pat1 and pat2 can contain variable
+    this covers the functionality of pattern_match, where only pat1 can contain variable
+    therefore no need to implement another pattern_match
+    '''
     if is_equal_pattern(pat1, pat2):
         return frame
     elif isinstance(pat1, VarPat):
@@ -1006,28 +1104,24 @@ def unify_match(pat1: SimplePat, pat2: SimplePat, frame: Frame) -> Frame:
 
 
 def extend_if_possible(pat1: VarPat, pat2: SimplePat, frame: Frame) -> Frame:
-    value1 = get_binding_value(frame, pat1.name)
+    value1 = get_binding_value(frame, pat1.name, pat1.version)
     if value1 is not None:
         return unify_match(value1, pat2, frame)
     elif isinstance(pat2, VarPat):
-        value2 = get_binding_value(frame, pat2.name)
+        value2 = get_binding_value(frame, pat2.name, pat2.version)
         if value2 is not None:
             return unify_match(pat1, value2, frame)
         else:
-            return LinkedListNode(Binding(pat1.name, pat2), frame)
+            return LinkedListNode(Binding(pat1.name, pat1.version, pat2), frame)
     elif depend_var_pattern(pat2, pat1, frame):
         return None
     else:
-        return LinkedListNode(Binding(pat1.name, pat2), frame)
+        return LinkedListNode(Binding(pat1.name, pat1.version, pat2), frame)
 
 
 def find_assertions(query: SimplePat, assertions: OptFntStream[SimplePat], frame: Frame) -> OptFntStream[Frame]:
     def _find_one_assertion(assertion: SimplePat) -> Frame:
-        unify_res = unify_match(query, assertion, frame)
-        if unify_res is None:
-            return None
-        else:
-            return unify_res
+        return unify_match(query, assertion, frame)
     return stream_map(_find_one_assertion, assertions)
 
 
@@ -1038,7 +1132,6 @@ def rename_rule(rule: Rule) -> Rule:
     '''
     version = get_next_global_var_version()
     concl_rn = rename_pattern(rule.conclusion, version)
-    concl_rn = cast(SimplePat, concl_rn)
     body_rn = rename_pattern(rule.body, version)
     return Rule(concl_rn, body_rn)
 
@@ -1055,7 +1148,7 @@ def apply_rules(query: SimplePat, assertions: OptFntStream[SimplePat], rules: Op
     return stream_flatten(frss)
 
 
-def qeval_simple_query(query: SimplePat, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule], frames: OptFntStream[Frame]) -> OptFntStream[Frame]:
+def qeval_simple(query: SimplePat, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule], frames: OptFntStream[Frame]) -> OptFntStream[Frame]:
     def _qeval_one_simple_query(fr: Frame):
         frames_ass = find_assertions(query, assertions, fr)
         def frames_qrl_delayed(): return apply_rules(query, assertions, rules, fr)
@@ -1064,11 +1157,24 @@ def qeval_simple_query(query: SimplePat, assertions: OptFntStream[SimplePat], ru
     return stream_flatten(frss)
 
 
+def qeval_empty(query: EmptyPat, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule], frames: OptFntStream[Frame]) -> OptFntStream[Frame]:
+    return frames
+
+
+update_qeval_rules({
+    SimplePat: qeval_simple,
+    EmptyPat: qeval_empty,
+})
+
 '''special form: and'''
 
 
+SpecialChildQxpr = Union[SpecialQxpr, ListQxpr]
+SpecialChildPat = Union[SpecialPat, PairPat, NilPat]
+
+
 class AndQxpr(SpecialQxpr):
-    def __init__(self, token: Token, contents: List[Qxpression]):
+    def __init__(self, token: Token, contents: List[SpecialChildQxpr]):
         super().__init__(token)
         self.contents = contents
 
@@ -1101,13 +1207,18 @@ def check_qxpr_var_and(qxpr: AndQxpr):
 
 
 class AndPat(SpecialPat):
-    def __init__(self, contents: List[Pattern]):
+    def __init__(self, contents: List[SpecialChildPat]):
         self.contents = contents
 
 
+def parse_special_child_pattern(qxpr: SpecialChildQxpr):
+    pat = parse_pattern_recursive(qxpr)
+    return cast(SpecialChildPat, pat)
+
+
 def parse_pattern_and(qxpr: AndQxpr):
-    contents = [parse_pattern_recursive(subqxpr)
-                for subqxpr in qxpr.contents]
+    contents = [parse_special_child_pattern(
+        subqxpr) for subqxpr in qxpr.contents]
     return AndPat(contents)
 
 
@@ -1117,6 +1228,19 @@ def stringify_pattern_and(pat: AndPat):
     return '(and %s)' % contents_str
 
 
+def rename_pattern_and(pat: AndPat, version: int):
+    contents = [rename_pattern(subpat, version) for subpat in pat.contents]
+    return AndPat(contents)
+
+
+def qeval_and(query: AndPat, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule], frames: OptFntStream[Frame]) -> OptFntStream[Frame]:
+    for content in query.contents:
+        if frames is None:
+            break
+        frames = qeval_recursive(content, assertions, rules, frames)
+    return frames
+
+
 def install_special_form_and():
     update_parse_qxpr_rules({'and': parse_compound_qxpr_and})
     update_check_qxpr_forbid_rules({AndQxpr: check_qxpr_forbid_and})
@@ -1124,13 +1248,15 @@ def install_special_form_and():
     update_check_qxpr_var_rules({AndQxpr: check_qxpr_var_and})
     update_parse_pattern_rules({AndQxpr: parse_pattern_and})
     update_stringify_pattern_rules({AndPat: stringify_pattern_and})
+    update_rename_pattern_rules({AndPat: rename_pattern_and})
+    update_qeval_rules({AndPat: qeval_and})
 
 
 '''special form: or'''
 
 
 class OrQxpr(SpecialQxpr):
-    def __init__(self, token: Token, contents: List[Qxpression]):
+    def __init__(self, token: Token, contents: List[SpecialChildQxpr]):
         super().__init__(token)
         self.contents = contents
 
@@ -1163,12 +1289,12 @@ def check_qxpr_var_or(qxpr: OrQxpr):
 
 
 class OrPat(SpecialPat):
-    def __init__(self, contents: List[Pattern]):
+    def __init__(self, contents: List[SpecialChildPat]):
         self.contents = contents
 
 
 def parse_pattern_or(qxpr: OrQxpr):
-    contents = [parse_pattern_recursive(subqxpr)
+    contents = [parse_special_child_pattern(subqxpr)
                 for subqxpr in qxpr.contents]
     return OrPat(contents)
 
@@ -1179,6 +1305,24 @@ def stringify_pattern_or(pat: OrPat):
     return '(or %s)' % contents_str
 
 
+def rename_pattern_or(pat: OrPat, version: int):
+    contents = [rename_pattern(subpat, version) for subpat in pat.contents]
+    return OrPat(contents)
+
+
+def qeval_or(query: OrPat, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule], frames: OptFntStream[Frame]) -> OptFntStream[Frame]:
+    def _qeval_or_from(start: int):
+        if start == len(query.contents):
+            return None
+        else:
+            headf = qeval_recursive(
+                query.contents[start], assertions, rules, frames)
+
+            def restf_delayed(): return _qeval_or_from(start+1)
+            return stream_interleave_delayed(headf, restf_delayed)
+    return _qeval_or_from(0)
+
+
 def install_special_form_or():
     update_parse_qxpr_rules({'or': parse_compound_qxpr_or})
     update_check_qxpr_forbid_rules({OrQxpr: check_qxpr_forbid_or})
@@ -1186,13 +1330,15 @@ def install_special_form_or():
     update_check_qxpr_var_rules({OrQxpr: check_qxpr_var_or})
     update_parse_pattern_rules({OrQxpr: parse_pattern_or})
     update_stringify_pattern_rules({OrPat: stringify_pattern_or})
+    update_rename_pattern_rules({OrPat: rename_pattern_or})
+    update_qeval_rules({OrPat: qeval_or})
 
 
 '''special form: not'''
 
 
 class NotQxpr(SpecialQxpr):
-    def __init__(self, token: Token, content: Qxpression):
+    def __init__(self, token: Token, content: SpecialChildQxpr):
         super().__init__(token)
         self.content = content
 
@@ -1222,18 +1368,29 @@ def check_qxpr_var_not(qxpr: NotQxpr):
 
 
 class NotPat(SpecialPat):
-    def __init__(self, content: Pattern):
+    def __init__(self, content: SpecialChildPat):
         self.content = content
 
 
 def parse_pattern_not(qxpr: NotQxpr):
-    content = parse_pattern_recursive(qxpr.content)
+    content = parse_special_child_pattern(qxpr.content)
     return NotPat(content)
 
 
 def stringify_pattern_not(pat: NotPat):
     content_str = stringify_pattern(pat.content)
     return '(not %s)' % content_str
+
+
+def rename_pattern_not(pat: NotPat, version: int):
+    content = rename_pattern(pat.content, version)
+    return NotPat(content)
+
+
+def qeval_not(query: NotPat, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule], frames: OptFntStream[Frame]) -> OptFntStream[Frame]:
+    def _qeval_not_filter(frame: Frame):
+        return qeval_recursive(query, assertions, rules, make_single_frame_stream(frame)) is None
+    return stream_filter(_qeval_not_filter, frames)
 
 
 def install_special_form_not():
@@ -1243,6 +1400,8 @@ def install_special_form_not():
     update_check_qxpr_var_rules({NotQxpr: check_qxpr_var_not})
     update_parse_pattern_rules({NotQxpr: parse_pattern_not})
     update_stringify_pattern_rules({NotPat: stringify_pattern_not})
+    update_rename_pattern_rules({NotPat: rename_pattern_not})
+    update_qeval_rules({NotPat: qeval_not})
 
 
 '''special form: lisp-value'''
@@ -1306,6 +1465,64 @@ def stringify_pattern_pred(pat: PredPat):
     return '(lisp-value %s %s)' % (pat.operator, operands_str)
 
 
+def rename_pattern_pred(pat: PredPat, version: int):
+    operands = [rename_pattern(subpat, version) for subpat in pat.operands]
+    return PredPat(pat.operator, operands)
+
+
+class Predicate:
+    def __init__(self, name: str, py_func: Callable[..., bool]):
+        self.name = name
+        self.arity = len(inspect.getfullargspec(py_func).args)
+        self.body = py_func
+
+
+class SchemePredError(Exception):
+    def __init__(self, message):
+        self.message = message
+
+
+_predicates: Dict[str, Predicate] = {}
+
+
+def update_predicates(py_func_dict: Dict[str, Callable[..., bool]]):
+    preds = {key: Predicate(key, py_func_dict[key]) for key in py_func_dict}
+    _predicates.update(preds)
+
+
+def qeval_pred(query: PredPat, assertions: OptFntStream[SimplePat], rules: OptFntStream[Rule], frames: OptFntStream[Frame]) -> OptFntStream[Frame]:
+    try:
+        if query.operator not in _predicates:
+            raise SchemePredError('%s predicate undefined' % query.operator)
+        pred = _predicates[query.operator]
+        if pred.arity != len(query.operands):
+            raise SchemePredError('%s predicate need %d argument, now %d provided' % (
+                query.operator, pred.arity, len(query.operands)))
+
+        def _qeval_pred_filter(frame: Frame):
+            return pred.body(*query.operands)
+        return stream_filter(_qeval_pred_filter, frames)
+    except SchemePredError as err:
+        scheme_panic(str(err))
+    return None  # just for typing
+
+
+def make_pred_num2_bool(py_func: Callable[[float, float], bool]):
+    def _pred_num2_bool(x: SimplePat, y: SimplePat) -> bool:
+        if not isinstance(x, NumberPat) or not isinstance(y, NumberPat):
+            raise SchemePredError('%s requires both operators to be numbers, now %s and %s' % (
+                py_func.__name__, type(x), type(y)))
+        x = cast(NumberPat, x)
+        y = cast(NumberPat, y)
+        return py_func(x.value, y.value)
+    return _pred_num2_bool
+
+
+pred_op_eq = make_pred_num2_bool(lambda a, b: a == b)
+pred_op_lt = make_pred_num2_bool(lambda a, b: a < b)
+pred_op_gt = make_pred_num2_bool(lambda a, b: a > b)
+
+
 def install_special_form_pred():
     update_parse_qxpr_rules(
         {'lisp-value': parse_compound_qxpr_pred})
@@ -1314,6 +1531,13 @@ def install_special_form_pred():
     update_check_qxpr_var_rules({PredQxpr: check_qxpr_var_pred})
     update_parse_pattern_rules({PredQxpr: parse_pattern_pred})
     update_stringify_pattern_rules({PredPat: stringify_pattern_pred})
+    update_rename_pattern_rules({PredPat: rename_pattern_pred})
+    update_qeval_rules({PredPat: qeval_pred})
+    update_predicates({
+        '=': pred_op_eq,
+        '<': pred_op_lt,
+        '>': pred_op_gt
+    })
 
 
 '''initialize test'''
@@ -1340,8 +1564,9 @@ def test_stream():
         [1, 2]), stream_from_list([3, 4])])).topn_values(4) == [1, 3, 2, 4]
 
 
-class SrcRes(TypedDict):
+class SrcParRes(TypedDict):
     source: str
+    parsed: Optional[str]
     result: Optional[str]
 
 
@@ -1351,7 +1576,20 @@ def stringify_rule(qrl: Rule):
     return '(rule %s %s)' % (concl_str, body_str)
 
 
-def test_one(assertions_obj: SrcRes, rules_obj: SrcRes, query_objs: List[SrcRes], panic: str):
+def stringify_result_frame(fs: OptFntStream[Frame], limit: int):
+    unq_binding_strs: Set[str] = set()
+    while fs is not None and len(unq_binding_strs) < limit:
+        f = fs.value()
+        d = resolve_final_frame(f)
+        keys = sorted(d.keys())
+        binding_str = '(%s)' % (', '.join(['%s=%s' % (k, stringify_pattern(d[k])) for k in keys]))
+        if binding_str not in unq_binding_strs:
+            unq_binding_strs.add(binding_str)
+    return ' '.join(sorted(list(unq_binding_strs)))
+
+
+
+def test_one(assertions_obj: SrcParRes, rules_obj: SrcParRes, query_objs: List[SrcParRes], panic: str):
     '''
     each test tries to execute the source code as much as possible
     capture the output, panic and result
@@ -1359,6 +1597,7 @@ def test_one(assertions_obj: SrcRes, rules_obj: SrcRes, query_objs: List[SrcRes]
     '''
 
     try:
+        assertion_stream = None
         assertions_source = assertions_obj['source'].strip()
         if len(assertions_source):
             print('* assertions-source: %s' % assertions_source)
@@ -1366,17 +1605,20 @@ def test_one(assertions_obj: SrcRes, rules_obj: SrcRes, query_objs: List[SrcRes]
             assertions_str = '\n'.join(
                 [stringify_pattern(pat) for pat in assertions])
             print('* assertions-parsed: %s' % assertions_str)
-            if assertions_obj['result'] is not None:
-                assert assertions_str == assertions_obj['result']
+            if assertions_obj['parsed'] is not None:
+                assert assertions_str == assertions_obj['parsed']
+            assertion_stream = make_assertion_stream(assertions)
 
+        rule_stream = None
         rules_source = rules_obj['source'].strip()
         if len(rules_source):
             print('* rules-source: %s' % rules_source)
             rules = read_all_rules(rules_source)
             rules_str = '\n'.join([stringify_rule(qrl) for qrl in rules])
             print('* rules-parsed: %s' % rules_str)
-            if rules_obj['result'] is not None:
-                assert rules_str == rules_obj['result']
+            if rules_obj['parsed'] is not None:
+                assert rules_str == rules_obj['parsed']
+            rule_stream = make_rule_stream(rules)
 
         for query_obj in query_objs:
             query_source = query_obj['source'].strip()
@@ -1384,8 +1626,13 @@ def test_one(assertions_obj: SrcRes, rules_obj: SrcRes, query_objs: List[SrcRes]
             query = read_single_query(query_source)
             query_str = stringify_pattern(query)
             print('* query-parsed: %s' % query_str)
+            if query_obj['parsed'] is not None:
+                assert query_str == query_obj['parsed']
+            result = qeval(query, assertion_stream, rule_stream)
+            result_str = stringify_result_frame(result, 3)
+            print('* query-result: %s' % result_str)
             if query_obj['result'] is not None:
-                assert query_str == query_obj['result']
+                assert result_str == query_obj['result']
 
         assert panic == ''
     except SchemePanic as err:
@@ -1395,54 +1642,54 @@ def test_one(assertions_obj: SrcRes, rules_obj: SrcRes, query_objs: List[SrcRes]
     print('----------')
 
 
-def make_src_res(**kargs: str) -> SrcRes:
+def make_src_par_res(**kargs: str) -> SrcParRes:
+    d: SrcParRes = {'source': '', 'parsed': None, 'result': None}
     if 'source' in kargs:
-        if 'result' in kargs:
-            return {'source': kargs['source'], 'result': kargs['result']}
-        else:
-            return {'source': kargs['source'], 'result': None}
-    else:
-        return {'source': '', 'result': None}
+        d['source'] = kargs['source']
+    if 'parsed' in kargs:
+        d['parsed'] = kargs['parsed']
+    if 'result' in kargs:
+        d['result'] = kargs['result']
+    return d
 
 
 def test_parse_assertions():
     test_one(
-        assertions_obj=make_src_res(source='some-symbol'),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(source='some-symbol'),
+        rules_obj=make_src_par_res(),
         query_objs=[],
         panic='parser error at SYMBOL:some-symbol in line 1: pattern should be list'
     )
     test_one(
-        assertions_obj=make_src_res(source='()'),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(source='()'),
+        rules_obj=make_src_par_res(),
         query_objs=[],
         panic='parser error at LEFT_PAREN in line 1: pattern should be non-empty list'
     )
     test_one(
-        assertions_obj=make_src_res(source='(salary (Bitdiddle Ben) ?amount)'),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(source='(salary (Bitdiddle Ben) ?amount)'),
+        rules_obj=make_src_par_res(),
         query_objs=[],
         panic='parser error at SYMBOL:?amount in line 1: pattern type VarQxpr forbidden'
     )
     test_one(
-        assertions_obj=make_src_res(
+        assertions_obj=make_src_par_res(
             source='''
             (and (job (Bitdiddle Ben) (computer wizard))
             (salary (Bitdiddle Ben) 60000))
-            ''',
-            result='(job (Bitdiddle Ben) (computer wizard))\n(salary (Bitdiddle Ben) 60000)'),
-        rules_obj=make_src_res(),
+            '''),
+        rules_obj=make_src_par_res(),
         query_objs=[],
         panic='parser error at LEFT_PAREN in line 1: pattern type SpecialQxpr forbidden'
     )
     test_one(
-        assertions_obj=make_src_res(
+        assertions_obj=make_src_par_res(
             source='''
             (job   (Bitdiddle Ben) (computer wizard))
             (salary (Bitdiddle Ben) 60000)
             ''',
             result='(job (Bitdiddle Ben) (computer wizard))\n(salary (Bitdiddle Ben) 60000)'),
-        rules_obj=make_src_res(),
+        rules_obj=make_src_par_res(),
         query_objs=[],
         panic=''
     )
@@ -1450,46 +1697,46 @@ def test_parse_assertions():
 
 def test_parse_queries():
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(),
         query_objs=[
-            make_src_res(
+            make_src_par_res(
                 source='(salary   (Bitdiddle Ben) ?amount)',
-                result='(salary (Bitdiddle Ben) ?amount)'
+                parsed='(salary (Bitdiddle Ben) ?amount)'
             )
         ],
         panic=''
     )
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(),
         query_objs=[
-            make_src_res(
+            make_src_par_res(
                 source='(salary (Bitdiddle ?faimily-name) ?amount)',
-                result='(salary (Bitdiddle ?faimily-name) ?amount)'
+                parsed='(salary (Bitdiddle ?faimily-name) ?amount)'
             )
         ],
         panic=''
     )
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(),
         query_objs=[
-            make_src_res(
+            make_src_par_res(
                 source='''
             (and (job ?name (computer wizard))
             (salary ?name 60000))
             ''',
-                result='(and (job ?name (computer wizard)) (salary ?name 60000))'
+                parsed='(and (job ?name (computer wizard)) (salary ?name 60000))'
             )
         ],
         panic=''
     )
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(),
         query_objs=[
-            make_src_res(
+            make_src_par_res(
                 source='''
             (and (job ?name (computer wizard))
             (salary (Bitdiddle Ben) 60000))
@@ -1499,29 +1746,29 @@ def test_parse_queries():
         panic='parser error at LEFT_PAREN in line 1: no variable exist'
     )
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(),
         query_objs=[
-            make_src_res(
+            make_src_par_res(
                 source='(salary (Bitdiddle . ?rest-name) ?amount)',
-                result='(salary (Bitdiddle . ?rest-name) ?amount)'
+                parsed='(salary (Bitdiddle . ?rest-name) ?amount)'
             )
         ],
         panic=''
     )
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(),
         query_objs=[
-            make_src_res(source='(salary (. ?name) ?amount)')
+            make_src_par_res(source='(salary (. ?name) ?amount)')
         ],
         panic='parser error at DOT in line 1: cannot have free or header dot within pattern'
     )
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(),
         query_objs=[
-            make_src_res(
+            make_src_par_res(
                 source='''
             (job (Bitdiddle Ben) (computer wizard))
             (salary (Bitdiddle Ben) 60000)
@@ -1531,18 +1778,18 @@ def test_parse_queries():
         panic='parser error at LEFT_PAREN in line 2: should have exactly one query'
     )
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(),
         query_objs=[
-            make_src_res(source='(job (Bitdiddle Ben) (computer wizard))')
+            make_src_par_res(source='(job (Bitdiddle Ben) (computer wizard))')
         ],
         panic='parser error at LEFT_PAREN in line 1: no variable exist'
     )
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(),
         query_objs=[
-            make_src_res(
+            make_src_par_res(
                 source='''
             (and (job ?name (computer wizard))
             (not (salary ?name ?amount)))
@@ -1552,10 +1799,10 @@ def test_parse_queries():
         panic='parser error at SYMBOL:?amount in line 2: unbound variable'
     )
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(),
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(),
         query_objs=[
-            make_src_res(
+            make_src_par_res(
                 source='''
             (and (job ?name (computer wizard))
             (lisp-value > ?amount 10000))
@@ -1568,31 +1815,67 @@ def test_parse_queries():
 
 def test_parse_rules():
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(
             source='(salary (Bitdiddle . ?rest-name) ?amount)'),
         query_objs=[],
         panic='parser error at LEFT_PAREN in line 1: rule should begin with rule symbol'
     )
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(source='(rule () ())'),
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(source='(rule () ())'),
         query_objs=[],
         panic='parser error at LEFT_PAREN in line 1: pattern should be non-empty list'
     )
     test_one(
-        assertions_obj=make_src_res(),
-        rules_obj=make_src_res(
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(
             source='''
           (rule (lives-near ?p-1 ?p-2)
             (and (address ?p-1 (?town . ?rest-1)) (address ?p-2 (?town . ?rest-2))
             (not (same ?p-1 ?p-2))))
           (rule (same ?x ?x))
           ''',
-            result='(rule (lives-near ?p-1 ?p-2) (and (address ?p-1 (?town . ?rest-1)) (address ?p-2 (?town . ?rest-2))' +
+            parsed='(rule (lives-near ?p-1 ?p-2) (and (address ?p-1 (?town . ?rest-1)) (address ?p-2 (?town . ?rest-2))' +
             ' (not (same ?p-1 ?p-2))))\n(rule (same ?x ?x) [empty])'
         ),
         query_objs=[],
+        panic=''
+    )
+
+
+def test_parse_undetected():
+    '''
+    not is not detected as keyword inside simple pattern, so this rule conclusion can have not
+    static checking are too much in this problem, I decide not to add more checking, so I ignore this
+    '''
+    test_one(
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(
+            source='(rule (job ?name (computer wizard) (not (salary ?name 60000))))',
+            parsed='(rule (job ?name (computer wizard) (not (salary ?name 60000))) [empty])'
+        ),
+        query_objs=[],
+        panic=''
+    )
+
+def test_qeval_pattern():
+    '''see chap 4.4.1 logic as programming'''
+    test_one(
+        assertions_obj=make_src_par_res(),
+        rules_obj=make_src_par_res(
+            source='''
+            (rule (append-to-form () ?y ?y))
+            (rule (append-to-form (?u . ?v) ?y (?u . ?z))
+                  (append-to-form ?v ?y ?z))
+            '''
+        ),
+        query_objs=[
+            make_src_par_res(
+                source='(append-to-form (a b) (c d) ?z)',
+                result='(?z=(a b c d))'
+            )
+        ],
         panic=''
     )
 
@@ -1602,6 +1885,8 @@ def test():
     test_parse_assertions()
     test_parse_queries()
     test_parse_rules()
+    test_parse_undetected()
+    test_qeval_pattern()
 
 
 if __name__ == '__main__':
