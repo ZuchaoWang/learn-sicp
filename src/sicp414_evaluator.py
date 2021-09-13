@@ -1573,9 +1573,13 @@ def eval_nil():
     return pure_eval_nil()
 
 
+def pure_eval_quote(expr: QuoteExpr):
+    return quote_token_combo(expr.content)
+
+
 @eval_rule_decorator
 def eval_quote(expr: QuoteExpr):
-    return quote_token_combo(expr.content)
+    return pure_eval_quote(expr)
 
 
 def pure_check_arity(expr: CallExpr, name: str, pos_arity: int, has_rest: bool, arg_count: int):
