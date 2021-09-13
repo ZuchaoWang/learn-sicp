@@ -1,6 +1,7 @@
 '''
-the strategy to add monitor to instruction is to transform its exec function
-wrapping it in a new function which add functionalities to original function
+the strategy to add monitor to instruction is to transform its exec/should_break function
+original exec is wrapped in a new function which add functionalities to original function
+should_break only used by breakpoints, so directly modified
 '''
 
 from typing import Dict, List, Set, Tuple, cast
@@ -58,7 +59,7 @@ def monitor_statistics(instructions: List[RegInst], state: RegMachineState, stat
 def test_one_statistics(case: RegMachineCase, nrng: Tuple[int, int]):
     ops = get_operations()
     machine = make_machine(case['regs'], ops, case['code'])
-    print('%s: (%d, %d)' % (case['name'], nrng[0], nrng[1]))
+    print('statistics: %s (%d, %d)' % (case['name'], nrng[0], nrng[1]))
     for nval in range(*nrng):
         machine.state.regs.update({'n': NumberVal(nval)})
         statistics = MachineStatistic()
@@ -147,7 +148,7 @@ def monitor_breakpoints(instructions: List[RegInst], bstate: MachineBreakpoints)
         _monitor_one(i, inst)
 
 
-def proceed_machine(machine: RegMachine, bstate: MachineBreakpoints): 
+def proceed_machine(machine: RegMachine):
     regs = machine.state.regs
     if regs['pc'] is None:
         assert False
@@ -159,19 +160,21 @@ def proceed_machine(machine: RegMachine, bstate: MachineBreakpoints):
     execute_machine(machine)
 
 
-def inspect_breakpoints(machine: RegMachine, bstate: MachineBreakpoints):
+def inspect_breakpoints(machine: RegMachine):
     regs = machine.state.regs
     if regs['pc'] is None:
         assert False
     pc = cast(RegInstPtr, regs['pc'])
     n = cast(NumberVal, regs['n']).value
     val = cast(NumberVal, regs['val']).value
-    print('pc.index = %d, regs[n] = %d, regs[val] = %d' % (pc.index, n, val))
-    return pc.index, n, val
+    print('n = %d, val = %d, pc.index = %d' % (n, val, pc.index))
+    return n, val, pc.index
 
 
 def test_breakpoints():
     case = case_fib_double_recur
+    print('breakpoints: %s (%s)' %
+          (case['name'], stringify_value(case['regs']['n'])))
     ops = get_operations()
     machine = make_machine(case['regs'], ops, case['code'])
     bstate = MachineBreakpoints()
@@ -180,33 +183,37 @@ def test_breakpoints():
     add_breakpoint(bstate, machine.symbol_table, 'return-sub-call-2', 1)
     init_machine_pc(machine)
     execute_machine(machine)
-    assert inspect_breakpoints(machine, bstate) == (9, 1, 0)
+    assert inspect_breakpoints(machine) == (1, 0, 14)
     # execute after breakpoint do nothing
-    execute_machine(machine) 
-    assert inspect_breakpoints(machine, bstate) == (9, 1, 0)
+    execute_machine(machine)
+    assert inspect_breakpoints(machine) == (1, 0, 14)
     proceed_machine(machine)
-    assert inspect_breakpoints(machine, bstate) == (9, 1, 1)
+    assert inspect_breakpoints(machine) == (1, 1, 14)
     proceed_machine(machine)
-    assert inspect_breakpoints(machine, bstate) == (9, 1, 0)
+    assert inspect_breakpoints(machine) == (1, 0, 14)
     proceed_machine(machine)
-    assert inspect_breakpoints(machine, bstate) == (9, 2, 1)
+    assert inspect_breakpoints(machine) == (2, 1, 14)
+    # add the second breakpoint, now alternatively stop at two breakpoints
     add_breakpoint(bstate, machine.symbol_table, 'base-case', -1)
     proceed_machine(machine)
-    assert inspect_breakpoints(machine, bstate) == (12, 2, 3)
+    assert inspect_breakpoints(machine) == (2, 3, 16)
     proceed_machine(machine)
-    assert inspect_breakpoints(machine, bstate) == (9, 1, 0)
+    assert inspect_breakpoints(machine) == (1, 0, 14)
     proceed_machine(machine)
-    assert inspect_breakpoints(machine, bstate) == (12, 1, 1)
+    assert inspect_breakpoints(machine) == (1, 1, 16)
     # remove first breakpoint, but using a different specificition
-    remove_breakpoint(bstate, machine.symbol_table, 'base-case', -4)
+    remove_breakpoint(bstate, machine.symbol_table, 'base-case', -3)
     proceed_machine(machine)
-    assert inspect_breakpoints(machine, bstate) == (12, 1, 2)
+    assert inspect_breakpoints(machine) == (1, 2, 16)
     proceed_machine(machine)
-    assert inspect_breakpoints(machine, bstate) == (12, 3, 5)
-    # remove all breakpoints
+    assert inspect_breakpoints(machine) == (3, 5, 16)
+    # remove all breakpoints. then proceed to end
     remove_breakpoint(bstate, machine.symbol_table, 'base-case', -1)
     proceed_machine(machine)
-    assert inspect_breakpoints(machine, bstate) == (14, 34, 55)
+    assert inspect_breakpoints(machine) == (34, 55, 19)
+
+
+'''testing main code'''
 
 
 def install_rules():
