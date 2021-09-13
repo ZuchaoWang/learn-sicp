@@ -1863,7 +1863,6 @@ def install_primitives():
         '=': prim_op_eq,
         '<': prim_op_lt,
         '>': prim_op_gt,
-        '>': prim_op_gt,
         'equal?': prim_equal,
         'length': prim_length,
         'car': prim_car,

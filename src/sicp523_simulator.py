@@ -1,7 +1,22 @@
-import inspect
-from typing import Any, Callable, Dict, Generic, List, Type, TypeVar, Union
+'''
+build a register machine, to execute machine language
+notice the machine language is still high level than real assembly
+because registers can store complex values, e.g. string, pair (although we haven't tried this)
+registers can also store label
 
-from sicp414_evaluator import UndefVal, is_truthy, scheme_panic
+we skip the parsing, error checking and code printing parts, because we have done enough of those in chap4
+our implementation also use python list instead of linked list to implement instructions for simplicity
+thus label can not directly points to instruction, instead our label contains instruction header and index
+notice when updating pc label, we should create a new instruction pointer, instead of mutating existing one
+mutation may run into trouble when pc value comes from a label, and label is to be used again later
+'''
+
+import inspect
+from typing import Any, Callable, Dict, List, Type, TypeVar, Union
+
+from sicp414_evaluator import NumberVal, install_stringify_value_rules, is_truthy, scheme_panic, stringify_value, \
+    prim_op_add, prim_op_sub, prim_op_mul, prim_op_div, prim_op_eq, prim_op_gt, prim_op_lt, prim_equal, prim_length, \
+    prim_car, prim_cdr, prim_cons, prim_list, prim_pair, prim_null, prim_display, prim_newline
 
 '''machine language syntax, we will skip parsing and directly provide classes'''
 
@@ -140,6 +155,7 @@ it turns labels into instruction pointer
 instructions into executable
 '''
 
+
 class SchemeAssembleError(Exception):
     def __init__(self, message):
         self.message = message
@@ -153,18 +169,21 @@ def assemble(code: List[Mstmt], state: GenericRegMachineState):
         def empty_exec(): return None
         for c in code:
             if isinstance(c, LabelMstmt):
-                symbol_table[c.name] = RegInstPtr(instructions, len(instructions))
+                symbol_table[c.name] = RegInstPtr(
+                    instructions, len(instructions))
             elif isinstance(c, InstMstmt):
                 '''initially we don't assemble instructions'''
                 instructions.append(RegInst(c, empty_exec))
             else:
-                raise SchemeAssembleError('wrong machine statement type %s' % type(c).__name__)
+                raise SchemeAssembleError(
+                    'wrong machine statement type %s' % type(c).__name__)
         '''second pass to assemble instructions'''
         for inst in instructions:
             inst.exec = assemble_mstmt(inst.code, symbol_table, state)
         return instructions
     except SchemeAssembleError as err:
         scheme_panic(err.message)
+
 
 GenericMxpr = TypeVar("GenericMxpr", bound=Mxpr)
 
@@ -214,12 +233,15 @@ def assemble_mxpr_op(mxpr: OpMxpr, symbol_table: Dict[str, RegInstPtr], state: R
     return lambda: operator(*[gop() for gop in get_operands])
 
 
-update_assemble_mxpr_rules({
-    ConstMxpr: assemble_mxpr_const,
-    RegMxpr: assemble_mxpr_reg,
-    LabelMxpr: assemble_mxpr_label,
-    OpMxpr: assemble_mxpr_op
-})
+def install_assemble_mxpr_rules():
+    rules = {
+        ConstMxpr: assemble_mxpr_const,
+        RegMxpr: assemble_mxpr_reg,
+        LabelMxpr: assemble_mxpr_label,
+        OpMxpr: assemble_mxpr_op
+    }
+    update_assemble_mxpr_rules(rules)
+
 
 GenericInstMstmt = TypeVar("GenericInstMstmt", bound=InstMstmt)
 
@@ -248,6 +270,7 @@ def assemble_mstmt_assign(mstmt: AssignMstmt, symbol_table: Dict[str, RegInstPtr
     regs = state.regs
     name = mstmt.name
     get_value = assemble_mxpr(mstmt.value, symbol_table, state)
+
     def run():
         regs[name] = get_value()
         advance_pc(regs)
@@ -257,6 +280,7 @@ def assemble_mstmt_assign(mstmt: AssignMstmt, symbol_table: Dict[str, RegInstPtr
 def assemble_mstmt_perform(mstmt: PerformMstmt, symbol_table: Dict[str, RegInstPtr], state: RegMachineState):
     regs = state.regs
     perform_op = assemble_mxpr_op(mstmt.value, symbol_table, state)
+
     def run():
         perform_op()
         advance_pc(regs)
@@ -266,6 +290,7 @@ def assemble_mstmt_perform(mstmt: PerformMstmt, symbol_table: Dict[str, RegInstP
 def assemble_mstmt_test(mstmt: TestMstmt, symbol_table: Dict[str, RegInstPtr], state: RegMachineState):
     regs = state.regs
     get_value = assemble_mxpr_op(mstmt.value, symbol_table, state)
+
     def run():
         regs['flag'] = get_value()
         advance_pc(regs)
@@ -275,6 +300,7 @@ def assemble_mstmt_test(mstmt: TestMstmt, symbol_table: Dict[str, RegInstPtr], s
 def assemble_mstmt_branch(mstmt: BranchMstmt, symbol_table: Dict[str, RegInstPtr], state: RegMachineState):
     regs = state.regs
     get_label = assemble_mxpr_label(mstmt.label, symbol_table, state)
+
     def run():
         if is_truthy(regs['flag']):
             regs['pc'] = get_label()
@@ -286,6 +312,7 @@ def assemble_mstmt_branch(mstmt: BranchMstmt, symbol_table: Dict[str, RegInstPtr
 def assemble_mstmt_goto(mstmt: GotoMstmt, symbol_table: Dict[str, RegInstPtr], state: RegMachineState):
     regs = state.regs
     get_label = assemble_mxpr(mstmt.dest, symbol_table, state)
+
     def run():
         regs['pc'] = get_label()
     return run
@@ -295,6 +322,7 @@ def assemble_mstmt_save(mstmt: SaveMstmt, symbol_table: Dict[str, RegInstPtr], s
     regs = state.regs
     name = mstmt.name
     stack = state.stack
+
     def run():
         stack.append(regs[name])
         advance_pc(regs)
@@ -305,21 +333,25 @@ def assemble_mstmt_restore(mstmt: RestoreMstmt, symbol_table: Dict[str, RegInstP
     regs = state.regs
     name = mstmt.name
     stack = state.stack
+
     def run():
         regs[name] = stack.pop()
         advance_pc(regs)
     return run
 
 
-update_assemble_mstmt_rules({
-    AssignMstmt: assemble_mstmt_assign,
-    PerformMstmt: assemble_mstmt_perform,
-    TestMstmt: assemble_mstmt_test,
-    BranchMstmt: assemble_mstmt_branch,
-    GotoMstmt: assemble_mstmt_goto,
-    SaveMstmt: assemble_mstmt_save,
-    RestoreMstmt: assemble_mstmt_restore
-})
+def install_assemble_mstmt_rules():
+    rules = {
+        AssignMstmt: assemble_mstmt_assign,
+        PerformMstmt: assemble_mstmt_perform,
+        TestMstmt: assemble_mstmt_test,
+        BranchMstmt: assemble_mstmt_branch,
+        GotoMstmt: assemble_mstmt_goto,
+        SaveMstmt: assemble_mstmt_save,
+        RestoreMstmt: assemble_mstmt_restore
+    }
+    update_assemble_mstmt_rules(rules)
+
 
 def make_machine(reg_names: List[str], ops: Dict[str, Callable], code: List[Mstmt]):
     stack: List[Any] = []
@@ -329,9 +361,152 @@ def make_machine(reg_names: List[str], ops: Dict[str, Callable], code: List[Mstm
     machine = RegMachine(state, instructions)
     return machine
 
+
 def execute_machine(machine: RegMachine):
     regs = machine.state.regs
     regs['pc'] = RegInstPtr(machine.instructions, 0)
     while regs['pc'].index < len(regs['pc'].insts):
         inst = regs['pc'].insts[regs['pc'].index]
         inst.exec()
+
+
+_operations: Dict[str, Callable] = {}
+
+
+def update_operations(ops: Dict[str, Callable]):
+    _operations.update(ops)
+
+
+def install_operations():
+    prims = {
+        '+': prim_op_add,
+        '-': prim_op_sub,
+        '*': prim_op_mul,
+        '/': prim_op_div,
+        '=': prim_op_eq,
+        '<': prim_op_lt,
+        '>': prim_op_gt,
+        '>': prim_op_gt,
+        'equal?': prim_equal,
+        'length': prim_length,
+        'car': prim_car,
+        'cdr': prim_cdr,
+        'cons': prim_cons,
+        'list': prim_list,
+        'pair?': prim_pair,
+        'null?': prim_null,
+        'display': prim_display,
+        'newline': prim_newline,
+    }
+    update_operations(prims)
+
+
+def test_one(name, reg_names, code, res_str_expected):
+    machine = make_machine(reg_names, _operations, code)
+    execute_machine(machine)
+    res = machine.state.regs[reg_names[0]]
+    res_str = stringify_value(res)
+    print('%s: %s' % (name, res_str))
+    assert res_str == res_str_expected
+
+
+def test():
+    test_one(
+        name='add',
+        reg_names=['s', 'a'],
+        code=[
+            AssignMstmt('a', ConstMxpr(NumberVal(1))),
+            AssignMstmt('s', OpMxpr(
+                '+', [RegMxpr('a'), ConstMxpr(NumberVal(2))]))
+        ],
+        res_str_expected='3')
+    test_one(
+        name='factorial-iter',
+        reg_names=['product', 'n'],
+        code=[
+            AssignMstmt('product', ConstMxpr(NumberVal(1))),
+            AssignMstmt('n', ConstMxpr(NumberVal(5))),
+            LabelMstmt('loop'),
+            TestMstmt(OpMxpr('=', [RegMxpr('n'), ConstMxpr(NumberVal(1))])),
+            BranchMstmt(LabelMxpr('done')),
+            AssignMstmt('product', OpMxpr(
+                '*', [RegMxpr('product'), RegMxpr('n')])),
+            AssignMstmt('n', OpMxpr(
+                '-', [RegMxpr('n'), ConstMxpr(NumberVal(1))])),
+            GotoMstmt(LabelMxpr('loop')),
+            LabelMstmt('done')
+        ],
+        res_str_expected='120')
+    test_one(
+        name='factorial-recur',
+        reg_names=['product', 'n', 'continue'],
+        code=[
+            AssignMstmt('n', ConstMxpr(NumberVal(5))),
+            AssignMstmt('continue', LabelMxpr('return-all')),
+            LabelMstmt('start'),
+            TestMstmt(OpMxpr('=', [RegMxpr('n'), ConstMxpr(NumberVal(1))])),
+            BranchMstmt(LabelMxpr('base-case')),
+            SaveMstmt('n'),
+            SaveMstmt('continue'),
+            AssignMstmt('n', OpMxpr(
+                '-', [RegMxpr('n'), ConstMxpr(NumberVal(1))])),
+            AssignMstmt('continue', LabelMxpr('return-sub-call')),
+            GotoMstmt(LabelMxpr('start')),
+            LabelMstmt('return-sub-call'),
+            RestoreMstmt('continue'),
+            RestoreMstmt('n'),
+            AssignMstmt('product', OpMxpr(
+                '*', [RegMxpr('product'), RegMxpr('n')])),
+            GotoMstmt(RegMxpr('continue')),
+            LabelMstmt('base-case'),
+            AssignMstmt('product', ConstMxpr(NumberVal(1))),
+            GotoMstmt(RegMxpr('continue')),
+            LabelMstmt('return-all')
+        ],
+        res_str_expected='120')
+    test_one(
+        name='fib-double-recur',
+        reg_names=['sum', 'n', 'continue'],
+        code=[
+            AssignMstmt('n', ConstMxpr(NumberVal(10))),
+            AssignMstmt('continue', LabelMxpr('return-all')),
+            LabelMstmt('start'),
+            TestMstmt(OpMxpr('<', [RegMxpr('n'), ConstMxpr(NumberVal(2))])),
+            BranchMstmt(LabelMxpr('base-case')),
+            SaveMstmt('continue'),
+            SaveMstmt('n'),
+            AssignMstmt('n', OpMxpr(
+                '-', [RegMxpr('n'), ConstMxpr(NumberVal(1))])),
+            AssignMstmt('continue', LabelMxpr('return-sub-call-1')),
+            GotoMstmt(LabelMxpr('start')),
+            LabelMstmt('return-sub-call-1'),
+            RestoreMstmt('n'),
+            SaveMstmt('sum'),
+            AssignMstmt('n', OpMxpr(
+                '-', [RegMxpr('n'), ConstMxpr(NumberVal(2))])),
+            AssignMstmt('continue', LabelMxpr('return-sub-call-2')),
+            GotoMstmt(LabelMxpr('start')),
+            LabelMstmt('return-sub-call-2'),
+            RestoreMstmt('n'),  # prev sum -> n, n used as temporary register
+            AssignMstmt('sum', OpMxpr(
+                '+', [RegMxpr('sum'), RegMxpr('n')])),
+            RestoreMstmt('continue'),
+            GotoMstmt(RegMxpr('continue')),
+            LabelMstmt('base-case'),
+            AssignMstmt('sum', RegMxpr('n')),
+            GotoMstmt(RegMxpr('continue')),
+            LabelMstmt('return-all')
+        ],
+        res_str_expected='55')
+
+
+def install_rules():
+    install_stringify_value_rules()
+    install_assemble_mxpr_rules()
+    install_assemble_mstmt_rules()
+    install_operations()
+
+
+if __name__ == '__main__':
+    install_rules()
+    test()
