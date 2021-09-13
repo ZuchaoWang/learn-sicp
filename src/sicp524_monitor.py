@@ -39,6 +39,7 @@ def monitor_statistics(instructions: List[RegInst], state: RegMachineState, stat
         statistics.total_insts += 1
 
     def _monitor_one(instruction: RegInst):
+        '''use this internal function s.t. instruction variable is no longer shared'''
         prev_exec = instruction.exec
         if isinstance(instruction.code, (SaveMstmt, RestoreMstmt)):
             def _exec():
@@ -84,7 +85,7 @@ def test_statistics():
 
 
 '''
-setting breakpoints on machine
+setting up breakpoints on machine
 see exercise 5.19
 '''
 
