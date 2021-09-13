@@ -365,8 +365,9 @@ def make_machine(custom_regs: Dict[str, Any], ops: Dict[str, Callable], code: Li
 
 
 def init_machine_pc(machine: RegMachine):
+    '''main label is the entrance of program'''
     regs = machine.state.regs
-    regs['pc'] = RegInstPtr(machine.instructions, 0)
+    regs['pc'] = machine.symbol_table['main']
 
 
 ShouldBreakFuncType = Callable[[RegInstPtr], bool]
@@ -459,6 +460,7 @@ case_add: RegMachineCase = {
     'name': 'add',
     'regs': {'val': None, 'a': NumberVal(0)},
     'code': [
+        LabelMstmt('main'),
         AssignMstmt('a', ConstMxpr(NumberVal(1))),
         AssignMstmt('val', OpMxpr(
             '+', [RegMxpr('a'), ConstMxpr(NumberVal(2))]))
@@ -470,6 +472,7 @@ case_factorial_iter: RegMachineCase = {
     'name': 'factorial-iter',
     'regs': {'val': None, 'n': NumberVal(5)},
     'code': [
+        LabelMstmt('main'),
         AssignMstmt('val', ConstMxpr(NumberVal(1))),
         LabelMstmt('loop'),
         TestMstmt(OpMxpr('=', [RegMxpr('n'), ConstMxpr(NumberVal(1))])),
@@ -488,6 +491,7 @@ case_factorial_recur: RegMachineCase = {
     'name': 'factorial-recur',
     'regs': {'val': None, 'continue': None, 'n': NumberVal(5)},
     'code': [
+        LabelMstmt('main'),
         AssignMstmt('continue', LabelMxpr('return-all')),
         LabelMstmt('start'),
         TestMstmt(OpMxpr('=', [RegMxpr('n'), ConstMxpr(NumberVal(1))])),
@@ -516,6 +520,7 @@ case_fib_double_recur: RegMachineCase = {
     'name': 'fib-double-recur',
     'regs': {'val': None, 'continue': None, 'n': NumberVal(10)},
     'code': [
+        LabelMstmt('main'),
         AssignMstmt('continue', LabelMxpr('return-all')),
         LabelMstmt('start'),
         TestMstmt(OpMxpr('<', [RegMxpr('n'), ConstMxpr(NumberVal(2))])),
