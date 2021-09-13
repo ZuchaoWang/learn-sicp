@@ -1,14 +1,15 @@
 '''
-the strategy to add monitor to instruction is to transform its exec/should_break function
+the strategy to support statistics is to transform its exec function
 original exec is wrapped in a new function which add functionalities to original function
-should_break only used by breakpoints, so directly modified
+
+the strategy to support breakpoint is to provide should_break function
 '''
 
 from typing import Dict, List, Set, Tuple, cast
 from sicp414_evaluator import NumberVal, install_stringify_value_rules, stringify_value
-from sicp523_simulator import RegInst, RegInstPtr, RegMachine, RegMachineCase, RegMachineState, RestoreMstmt, SaveMstmt, execute_machine, \
+from sicp523_simulator import RegInst, RegInstPtr, RegMachine, RegMachineCase, RegMachineState, RestoreMstmt, SaveMstmt, ShouldBreakFuncType, \
     get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, \
-    case_factorial_iter, case_factorial_recur, case_fib_double_recur
+    case_factorial_iter, case_factorial_recur, case_fib_double_recur, make_run_machine, run_machine, step_machine
 
 '''recording statistics of stack and instructions'''
 
@@ -20,11 +21,10 @@ class MachineStatistic:
         self.stack_depth = 0
 
 
-def monitor_reset(instructions: List[RegInst]):
-    '''reset exec to raw_exec'''
-    for inst in instructions:
-        inst.exec = inst.raw_exec
-        inst.should_break = lambda: False
+def reset_statistic(statistics: MachineStatistic):
+    statistics.total_insts = 0
+    statistics.stack_ops = 0
+    statistics.stack_depth = 0
 
 
 def monitor_statistics(instructions: List[RegInst], state: RegMachineState, statistics: MachineStatistic):
@@ -59,13 +59,14 @@ def monitor_statistics(instructions: List[RegInst], state: RegMachineState, stat
 def test_one_statistics(case: RegMachineCase, nrng: Tuple[int, int]):
     ops = get_operations()
     machine = make_machine(case['regs'], ops, case['code'])
+    statistics = MachineStatistic()
+    monitor_statistics(machine.instructions, machine.state, statistics)
     print('statistics: %s (%d, %d)' % (case['name'], nrng[0], nrng[1]))
     for nval in range(*nrng):
         machine.state.regs.update({'n': NumberVal(nval)})
-        statistics = MachineStatistic()
-        monitor_reset(machine.instructions)
-        monitor_statistics(machine.instructions, machine.state, statistics)
+        reset_statistic(statistics)
         init_machine_pc(machine)
+        execute_machine = make_run_machine(lambda _: False)
         execute_machine(machine)
         res = machine.state.regs['val']
         res_str = stringify_value(res)
@@ -137,27 +138,15 @@ def check_breakpoint(bstate: MachineBreakpoints, pc: RegInstPtr):
     return (pc_insts_id in bstate.breakpoints) and (pc.index in bstate.breakpoints[pc_insts_id])
 
 
-def monitor_breakpoints(instructions: List[RegInst], bstate: MachineBreakpoints):
-    '''additional assemble, change exec functions'''
-    def _monitor_one(index: int, instruction: RegInst):
-        def _should_break():
-            return check_breakpoint(bstate, RegInstPtr(instructions, index))
-        instruction.should_break = _should_break
-
-    for i, inst in enumerate(instructions):
-        _monitor_one(i, inst)
-
-
-def proceed_machine(machine: RegMachine):
-    regs = machine.state.regs
-    if regs['pc'] is None:
-        assert False
-    pc = cast(RegInstPtr, regs['pc'])
-    if pc.index < len(pc.insts):
-        '''otherwise just read one instruction, regardless of exec return state'''
-        inst = pc.insts[pc.index]
-        inst.exec()
-    execute_machine(machine)
+def make_proceed_machine(should_break: ShouldBreakFuncType):
+    '''
+    proceed runs the first instruction regardless of breakpoint
+    then run others respecting the breakpoints, just as execute_machine
+    '''
+    def _process_machine(machine: RegMachine):
+        step_machine(machine, lambda _: False)
+        run_machine(machine, should_break)
+    return _process_machine
 
 
 def inspect_breakpoints(machine: RegMachine):
@@ -178,8 +167,11 @@ def test_breakpoints():
     ops = get_operations()
     machine = make_machine(case['regs'], ops, case['code'])
     bstate = MachineBreakpoints()
-    monitor_reset(machine.instructions)
-    monitor_breakpoints(machine.instructions, bstate)
+    def should_break(pc): return check_breakpoint(bstate, pc)
+    execute_machine = make_run_machine(should_break)
+    proceed_machine = make_proceed_machine(should_break)
+
+    # setup ok
     add_breakpoint(bstate, machine.symbol_table, 'return-sub-call-2', 1)
     init_machine_pc(machine)
     execute_machine(machine)
