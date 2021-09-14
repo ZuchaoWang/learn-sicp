@@ -192,15 +192,15 @@ GenericMxpr = TypeVar("GenericMxpr", bound=Mxpr)
 AssembleMxprFuncType = Callable[[
     GenericMxpr, Dict[str, RegInstPtr], GenericRegMachineState], Callable]
 
-_assemble_mxpr_rules: Dict[Tuple[Type, Type], AssembleMxprFuncType] = {}
+_assemble_mxpr_rules: Dict[Type, AssembleMxprFuncType] = {}
 
 
-def update_assemble_mxpr_rules(rules: Dict[Tuple[Type, Type], AssembleMxprFuncType]):
+def update_assemble_mxpr_rules(rules: Dict[Type, AssembleMxprFuncType]):
     _assemble_mxpr_rules.update(rules)
 
 
 def assemble_mxpr(mxpr: Mxpr, symbol_table: Dict[str, RegInstPtr], state: GenericRegMachineState):
-    func = _assemble_mxpr_rules[type(mxpr), type(state)]
+    func = _assemble_mxpr_rules[type(mxpr)]
     return func(mxpr, symbol_table, state)
 
 
@@ -237,10 +237,10 @@ def assemble_mxpr_op(mxpr: OpMxpr, symbol_table: Dict[str, RegInstPtr], state: R
 
 def install_assemble_mxpr_rules():
     rules = {
-        (ConstMxpr, RegMachineState): assemble_mxpr_const,
-        (RegMxpr, RegMachineState): assemble_mxpr_reg,
-        (LabelMxpr, RegMachineState): assemble_mxpr_label,
-        (OpMxpr, RegMachineState): assemble_mxpr_op
+        ConstMxpr: assemble_mxpr_const,
+        RegMxpr: assemble_mxpr_reg,
+        LabelMxpr: assemble_mxpr_label,
+        OpMxpr: assemble_mxpr_op
     }
     update_assemble_mxpr_rules(rules)
 
@@ -250,15 +250,15 @@ GenericInstMstmt = TypeVar("GenericInstMstmt", bound=InstMstmt)
 AssembleMstmtFuncType = Callable[[
     GenericInstMstmt, Dict[str, RegInstPtr], GenericRegMachineState], Callable]
 
-_assemble_mstmt_rules: Dict[Tuple[Type, Type], AssembleMstmtFuncType] = {}
+_assemble_mstmt_rules: Dict[Type, AssembleMstmtFuncType] = {}
 
 
-def update_assemble_mstmt_rules(rules: Dict[Tuple[Type, Type], AssembleMstmtFuncType]):
+def update_assemble_mstmt_rules(rules: Dict[Type, AssembleMstmtFuncType]):
     _assemble_mstmt_rules.update(rules)
 
 
 def assemble_mstmt(mstmt: InstMstmt, symbol_table: Dict[str, RegInstPtr], state: GenericRegMachineState):
-    func = _assemble_mstmt_rules[type(mstmt), type(state)]
+    func = _assemble_mstmt_rules[type(mstmt)]
     return func(mstmt, symbol_table, state)
 
 
@@ -344,13 +344,13 @@ def assemble_mstmt_restore(mstmt: RestoreMstmt, symbol_table: Dict[str, RegInstP
 
 def install_assemble_mstmt_rules():
     rules = {
-        (AssignMstmt, RegMachineState): assemble_mstmt_assign,
-        (PerformMstmt, RegMachineState): assemble_mstmt_perform,
-        (TestMstmt, RegMachineState): assemble_mstmt_test,
-        (BranchMstmt, RegMachineState): assemble_mstmt_branch,
-        (GotoMstmt, RegMachineState): assemble_mstmt_goto,
-        (SaveMstmt, RegMachineState): assemble_mstmt_save,
-        (RestoreMstmt, RegMachineState): assemble_mstmt_restore
+        AssignMstmt: assemble_mstmt_assign,
+        PerformMstmt: assemble_mstmt_perform,
+        TestMstmt: assemble_mstmt_test,
+        BranchMstmt: assemble_mstmt_branch,
+        GotoMstmt: assemble_mstmt_goto,
+        SaveMstmt: assemble_mstmt_save,
+        RestoreMstmt: assemble_mstmt_restore
     }
     update_assemble_mstmt_rules(rules)
 
