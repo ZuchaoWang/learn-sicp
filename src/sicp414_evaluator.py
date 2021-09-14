@@ -1537,7 +1537,7 @@ def pure_eval_symbol(expr: SymbolExpr, env: Environment):
 
 @eval_rule_decorator
 def eval_symbol(expr: SymbolExpr, env: Environment):
-    pure_eval_symbol(expr, env)
+    return pure_eval_symbol(expr, env)
 
 
 def pure_eval_string(expr: StringExpr):

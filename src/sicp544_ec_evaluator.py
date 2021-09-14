@@ -5,7 +5,7 @@ unless we generate the code using python, but that will make the code hard to re
 '''
 
 from typing import Any, Callable, Dict, List, Set, Type, TypedDict, Union
-from sicp414_evaluator import AndExpr, BooleanVal, CallExpr, Environment, Expression, GenericExpr, GenericVal, NilExpr, NilVal, NumberVal, OrExpr, PairVal, PrimVal, ProcPlainVal, ProcVal, QuoteExpr, SchemeEnvError, SchemePanic, SchemeRuntimeError, SchemeVal, SequenceExpr, StringExpr, StringVal, SymbolExpr, NumberExpr, BooleanExpr, Token, TokenTag, env_extend, env_lookup, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_check_prim_arity, pure_check_proc_arity, pure_eval_boolean, pure_eval_call_proc_extend_env, pure_eval_lambda_plain, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, pure_eval_symbol, scan_source, scheme_flush, scheme_panic, stringify_expr, stringify_value
+from sicp414_evaluator import AndExpr, BooleanVal, CallExpr, Environment, Expression, GenericExpr, GenericVal, NilExpr, NilVal, NumberVal, OrExpr, PairVal, PrimVal, ProcPlainVal, ProcVal, QuoteExpr, SchemeEnvError, SchemePanic, SchemePrimError, SchemeRuntimeError, SchemeVal, SequenceExpr, StringExpr, StringVal, SymbolExpr, NumberExpr, BooleanExpr, Token, TokenTag, env_extend, env_lookup, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_check_prim_arity, pure_check_proc_arity, pure_eval_boolean, pure_eval_call_invalid, pure_eval_call_proc_extend_env, pure_eval_lambda_plain, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, pure_eval_symbol, scan_source, scheme_flush, scheme_panic, stringify_expr, stringify_value
 from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, OpMxpr, PerformMstmt, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, make_run_machine, update_operations
 from sicp524_monitor import MachineStatistic, monitor_statistics
 
@@ -46,9 +46,8 @@ ec_eval_code = [
                                 ConstMxpr(StringVal('CallExpr'))])),
     BranchMstmt(LabelMxpr('ev-call')),
     # put expression type in val, then goto error
-    AssignMstmt('val', RegMxpr('unev')),
+    AssignMstmt('val', OpMxpr('ec_eval_expr_invalid', [RegMxpr('expr')])),
     GotoMstmt(LabelMxpr('error-unknown-expression-type')),
-
 
 
     LabelMstmt('ev-string'),
@@ -174,6 +173,7 @@ ec_eval_code = [
         'get_expr_at', [RegMxpr('unev'), RegMxpr('unev3')])),
     AssignMstmt('continue', LabelMxpr('ev-call-operand-ret')),
     GotoMstmt(LabelMxpr('eval-dispatch')),
+    LabelMstmt('ev-call-operand-ret'),
     RestoreMstmt('argl'),
     RestoreMstmt('unev3'),
     RestoreMstmt('unev2'),
@@ -195,13 +195,13 @@ ec_eval_code = [
     TestMstmt(OpMxpr('equal?', [RegMxpr('unev'),
                                 ConstMxpr(StringVal('PrimVal'))])),
     BranchMstmt(LabelMxpr('ev-call-prim')),
-    AssignMstmt('val', RegMxpr('unev')),
+    AssignMstmt('val', OpMxpr('ec_eval_call_invalid', [RegMxpr('expr'), RegMxpr('proc')])),
     GotoMstmt(LabelMxpr('error-unknown-operator-type')),
 
 
     LabelMstmt('ev-call-proc-plain'),
-    AssignMstmt('val', OpMxpr('pure_check_proc_arity', [RegMxpr('expr'), RegMxpr('proc'), RegMxpr('argl')])),
-    TestMstmt(OpMxpr('equal?', [RegMxpr('val'), ConstMxpr(StringVal(''))])),
+    AssignMstmt('val', OpMxpr('ec_check_proc_arity', [RegMxpr('expr'), RegMxpr('proc'), RegMxpr('argl')])),
+    TestMstmt(OpMxpr('equal?', [RegMxpr('val'), ConstMxpr(NilVal())])),
     BranchMstmt(LabelMxpr('ev-call-proc-plain-arity-ok')),
     GotoMstmt(LabelMxpr('error-call-arity')),
     LabelMstmt('ev-call-proc-plain-arity-ok'),
@@ -211,38 +211,30 @@ ec_eval_code = [
 
 
     LabelMstmt('ev-call-prim'),
-    AssignMstmt('val', OpMxpr('pure_check_prim_arity', [RegMxpr('expr'), RegMxpr('proc'), RegMxpr('argl')])),
-    TestMstmt(OpMxpr('equal?', [RegMxpr('val'), ConstMxpr(StringVal(''))])),
+    AssignMstmt('val', OpMxpr('ec_check_prim_arity', [RegMxpr('expr'), RegMxpr('proc'), RegMxpr('argl')])),
+    TestMstmt(OpMxpr('equal?', [RegMxpr('val'), ConstMxpr(NilVal())])),
     BranchMstmt(LabelMxpr('ev-call-prim-arity-ok')),
     GotoMstmt(LabelMxpr('error-call-arity')),
     LabelMstmt('ev-call-prim-arity-ok'),
-    AssignMstmt('val', OpMxpr('call_primitive', [RegMxpr('proc'), RegMxpr('argl')])),
-    GotoMstmt(LabelMxpr('continue')),
+    AssignMstmt('uenv', OpMxpr('call_prim', [RegMxpr('expr'), RegMxpr('proc'), RegMxpr('argl')])),
+    AssignMstmt('val', OpMxpr('car', [RegMxpr('uenv')])), 
+    TestMstmt(OpMxpr('equal?', [RegMxpr('val'), ConstMxpr(NilVal())])),
+    BranchMstmt(LabelMxpr('ev-call-prim-call-ok')),
+    GotoMstmt(LabelMxpr('error-call-prim')),
+    LabelMstmt('ev-call-prim-call-ok'),
+    AssignMstmt('val', OpMxpr('cdr', [RegMxpr('uenv')])), 
+    GotoMstmt(RegMxpr('continue')),
 
 
+    # handling of all errors are the same
     LabelMstmt('error-unknown-expression-type'),
-    PerformMstmt(OpMxpr('print_panic', [ConstMxpr(
-        StringVal('error-unknown-expression-type')), RegMxpr('val')])),
-    # following goto not really necessary, since print_panic will exit execution
-    GotoMstmt(LabelMxpr('done')),
-
-
     LabelMstmt('error-unknown-operator-type'),
-    PerformMstmt(OpMxpr('print_panic', [ConstMxpr(
-        StringVal('error-unknown-operator-type')), RegMxpr('val')])),
-    # following goto not really necessary, since print_panic will exit execution
-    GotoMstmt(LabelMxpr('done')),
-
-
     LabelMstmt('error-symbol-undefined'),
-    PerformMstmt(OpMxpr('print_panic', [ConstMxpr(
-        StringVal('error-symbol-undefined')), RegMxpr('val')])),
-    GotoMstmt(LabelMxpr('done')),
-
-
     LabelMstmt('error-call-arity'),
-    PerformMstmt(OpMxpr('print_panic', [ConstMxpr(
-        StringVal('error-call-arity')), RegMxpr('val')])),
+    LabelMstmt('error-call-prim'),
+    # just goto_panic, assuming the error message in val 
+    PerformMstmt(OpMxpr('goto_panic', [RegMxpr('val')])),
+    # following goto not really necessary, since goto_panic will exit execution
     GotoMstmt(LabelMxpr('done')),
 
 
@@ -261,22 +253,33 @@ def ec_eval_symbol(expr: SymbolExpr, env: Environment):
     '''return error and result'''
     try:
         return PairVal(NilVal(), pure_eval_symbol(expr, env))
-    except SchemeEnvError:
-        return PairVal(StringVal(expr.name.literal), NilVal())
+    except SchemeRuntimeError as err:
+        return PairVal(StringVal(str(err)), NilVal())
 
 
-def ec_pure_check_prim_arity(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
+def ec_eval_expr_invalid(expr: Expression):
+    return 'expression type undefined: %s' % get_expr_type(expr)
+
+
+def ec_eval_call_invalid(expr: CallExpr, operator: SchemeVal):
     try:
-        pure_check_prim_arity(expr, operator, operands)
-        return StringVal('')
+        pure_eval_call_invalid(expr, operator)
     except SchemeRuntimeError as err:
         return StringVal(str(err))
 
 
-def ec_pure_check_proc_arity(expr: CallExpr, operator: ProcVal, operands: List[SchemeVal]):
+def ec_check_prim_arity(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
+    try:
+        pure_check_prim_arity(expr, operator, operands)
+        return NilVal()
+    except SchemeRuntimeError as err:
+        return StringVal(str(err))
+
+
+def ec_check_proc_arity(expr: CallExpr, operator: ProcVal, operands: List[SchemeVal]):
     try:
         pure_check_proc_arity(expr, operator, operands)
-        return StringVal('')
+        return NilVal()
     except SchemeRuntimeError as err:
         return StringVal(str(err))
 
@@ -317,13 +320,29 @@ def get_val_type(expr: GenericVal):
     return StringVal(type(expr).__name__)
 
 
-def print_panic(error: StringVal, detail: StringVal):
-    message = stringify_value(error) + ": " + stringify_value(detail)
-    scheme_panic(message)
+def call_prim(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
+    try:
+        return PairVal(NilVal(), operator.body(*operands))
+    except SchemePrimError as err:
+        rt_err = SchemeRuntimeError(expr.paren, err.message)
+        return PairVal(StringVal(str(rt_err)), NilVal())
+
+
+def goto_panic(message: StringVal):
+    scheme_panic(message.value)
 
 
 def install_ec_operations():
     ops = {
+        'pure_eval_string': pure_eval_string,
+        'pure_eval_number': pure_eval_number,
+        'pure_eval_boolean': pure_eval_boolean,
+        'pure_eval_nil': pure_eval_nil,
+        'pure_eval_quote': pure_eval_quote,
+        'pure_eval_lambda_plain': pure_eval_lambda_plain,
+        'pure_eval_call_proc_extend_env': pure_eval_call_proc_extend_env,
+        'goto_panic': goto_panic,
+
         'get_expr_type': get_expr_type,
         'get_expr_contents': get_expr_contents,
         'get_exprs_len': get_exprs_len,
@@ -332,17 +351,13 @@ def install_ec_operations():
         'get_call_operands': get_call_operands,
         'get_proc_plain_val_body': get_proc_plain_val_body,
         'append_val_list': append_val_list,
-        'pure_eval_string': pure_eval_string,
-        'pure_eval_number': pure_eval_number,
-        'pure_eval_boolean': pure_eval_boolean,
-        'pure_eval_nil': pure_eval_nil,
-        'pure_eval_quote': pure_eval_quote,
+        'get_val_type': get_val_type,
+        'call_prim': call_prim,
         'ec_eval_symbol': ec_eval_symbol,
-        'ec_pure_check_prim_arity': ec_pure_check_prim_arity,
-        'ec_pure_check_proc_arity': ec_pure_check_proc_arity,
-        'pure_eval_lambda_plain': pure_eval_lambda_plain,
-        'pure_eval_call_proc_extend_env': pure_eval_call_proc_extend_env,
-        'print_panic': print_panic
+        'ec_eval_expr_invalid': ec_eval_expr_invalid,
+        'ec_eval_call_invalid': ec_eval_call_invalid,
+        'ec_check_prim_arity': ec_check_prim_arity,
+        'ec_check_proc_arity': ec_check_proc_arity,
     }
     update_operations(ops)
 
@@ -402,7 +417,7 @@ def test_one(source: str, **kargs: str):
 def test():
     test_one(
         'x',
-        panic='error-symbol-undefined: x'
+        panic='runtime error at SYMBOL:x in line 1: symbol undefined'
     )
     test_one(
         '''
