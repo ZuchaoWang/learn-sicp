@@ -1528,12 +1528,16 @@ def eval_sequence(expr: SequenceExpr, env: Environment, evl: EvalRecurFuncType):
     return res
 
 
-@eval_rule_decorator
-def eval_symbol(expr: SymbolExpr, env: Environment):
+def pure_eval_symbol(expr: SymbolExpr, env: Environment):
     try:
         return env_lookup(env, expr.name.literal)
     except SchemeEnvError:
         raise SchemeRuntimeError(expr.name, 'symbol undefined')
+
+
+@eval_rule_decorator
+def eval_symbol(expr: SymbolExpr, env: Environment):
+    pure_eval_symbol(expr, env)
 
 
 def pure_eval_string(expr: StringExpr):
