@@ -5,9 +5,9 @@ unless we generate the code using python, but that will make the code hard to re
 '''
 
 from typing import List, Union
-from sicp414_evaluator import AndExpr, CallExpr, Environment, Expression, GenericExpr, GenericVal, \
+from sicp414_evaluator import AndExpr, BooleanVal, CallExpr, Environment, Expression, GenericExpr, GenericVal, IfExpr, \
     NilVal, NumberVal, OrExpr, PairVal, PrimVal, ProcPlainVal, ProcVal, SchemePanic, SchemePrimError, \
-    SchemeRuntimeError, SchemeVal, SequenceExpr, StringVal, SymbolExpr, install_is_equal_rules, \
+    SchemeRuntimeError, SchemeVal, SequenceExpr, StringVal, SymbolExpr, UndefVal, install_is_equal_rules, \
     install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, \
     make_global_env, parse_expr, parse_tokens, pure_check_prim_arity, pure_check_proc_arity, pure_eval_boolean, \
     pure_eval_call_invalid, pure_eval_call_proc_extend_env, pure_eval_lambda_plain, pure_eval_nil, \
@@ -44,6 +44,8 @@ ec_eval_code = [
     BranchMstmt(LabelMxpr('ev-lambda')),
     TestMstmt(OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(StringVal('CallExpr'))])),
     BranchMstmt(LabelMxpr('ev-call')),
+    TestMstmt(OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(StringVal('IfExpr'))])),
+    BranchMstmt(LabelMxpr('ev-if')),
     # put expression type in val, then goto error
     AssignMstmt('val', OpMxpr('ec_eval_expr_invalid', [RegMxpr('expr')])),
     GotoMstmt(LabelMxpr('error-unknown-expression-type')),
@@ -209,6 +211,33 @@ ec_eval_code = [
     AssignMstmt('val', OpMxpr('cdr', [RegMxpr('uenv')])), 
     GotoMstmt(RegMxpr('continue')),
 
+  LabelMstmt('ev-if'),
+    SaveMstmt('continue'),
+    SaveMstmt('expr'),
+    SaveMstmt('env'),
+    AssignMstmt('expr', OpMxpr('get_if_predicate', [RegMxpr('expr')])),
+    AssignMstmt('continue', LabelMxpr('ev-if-predicate-ret')),
+    GotoMstmt(LabelMxpr('eval-dispatch')),
+  LabelMstmt('ev-if-predicate-ret'),
+    RestoreMstmt('env'),
+    RestoreMstmt('expr'),
+    RestoreMstmt('continue'),
+    # directly assigning flag, not using test
+    AssignMstmt('flag', RegMxpr('val')),
+    BranchMstmt(LabelMxpr('ev-if-consequent')),
+    TestMstmt(OpMxpr('has_if_alternative', [RegMxpr('expr')])),
+    BranchMstmt(LabelMxpr('ev-if-alternative')),
+    # no alternative
+    AssignMstmt('val', ConstMxpr(UndefVal())),
+    GotoMstmt(RegMxpr('continue')),
+    # tail recursion supported
+  LabelMstmt('ev-if-consequent'),
+    AssignMstmt('expr', OpMxpr('get_if_consequent', [RegMxpr('expr')])),
+    GotoMstmt(LabelMxpr('eval-dispatch')),
+  LabelMstmt('ev-if-alternative'),
+    AssignMstmt('expr', OpMxpr('get_if_alternative', [RegMxpr('expr')])),
+    GotoMstmt(LabelMxpr('eval-dispatch')),
+
     # handling of all errors are the same
   LabelMstmt('error-unknown-expression-type'),
   LabelMstmt('error-unknown-operator-type'),
@@ -318,6 +347,22 @@ def call_prim(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
         return PairVal(StringVal(str(rt_err)), NilVal())
 
 
+def get_if_predicate(expr: IfExpr):
+    return expr.pred
+
+
+def get_if_consequent(expr: IfExpr):
+    return expr.then_branch
+
+
+def get_if_alternative(expr: IfExpr):
+    return expr.else_branch
+
+
+def has_if_alternative(expr: IfExpr):
+    return BooleanVal(expr.else_branch is not None)
+
+
 def goto_panic(message: StringVal):
     scheme_panic(message.value)
 
@@ -344,6 +389,10 @@ def install_ec_operations():
         'append_val_list': append_val_list,
         'get_val_type': get_val_type,
         'call_prim': call_prim,
+        'get_if_predicate': get_if_predicate,
+        'get_if_consequent': get_if_consequent,
+        'get_if_alternative': get_if_alternative,
+        'has_if_alternative': has_if_alternative,
         'ec_eval_symbol': ec_eval_symbol,
         'ec_eval_expr_invalid': ec_eval_expr_invalid,
         'ec_eval_call_invalid': ec_eval_call_invalid,
@@ -423,6 +472,10 @@ def test():
     test_one(
         '((lambda (x) (+ x 1)) 2)',
         result='3',
+    )
+    test_one(
+        '(if #t 1 2)',
+        result='1',
     )
 
 
