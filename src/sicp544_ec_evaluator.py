@@ -223,6 +223,7 @@ ec_eval_code = [
     RestoreMstmt('expr'),
     RestoreMstmt('continue'),
     # directly assigning flag, not using test
+    # here we assume TestMstmt will call is_truthy, so flag does not have to be boolean
     AssignMstmt('flag', RegMxpr('val')),
     BranchMstmt(LabelMxpr('ev-if-consequent')),
     TestMstmt(OpMxpr('has_if_alternative', [RegMxpr('expr')])),
