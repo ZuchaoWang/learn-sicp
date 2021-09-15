@@ -136,11 +136,15 @@ ec_eval_code = [
     AssignMstmt('continue', LabelMxpr('ev-call-operands')),
     GotoMstmt(LabelMxpr('eval-dispatch')),
   LabelMstmt('ev-call-operands'),
-    AssignMstmt('proc', RegMxpr('val')),
     # getting operands
     # we still do save/restore for the last operand
     # this has a little performance lost, but do not destroy tail recursion
-    AssignMstmt('argl', ConstMxpr([])),
+    AssignMstmt('proc', RegMxpr('val')),
+    # each time we must create a new empty list
+    # therefore we must call op init_val_list
+    # we cannot assign from a const [], otherwise that [] will be mutated and reused
+    # an alternative solution is to not mutate to [], instead every append create a new one
+    AssignMstmt('argl', OpMxpr('init_val_list', [])),
     RestoreMstmt('unev'),
     RestoreMstmt('env'),
     AssignMstmt('unev2', OpMxpr('get_exprs_len', [RegMxpr('unev')])),
@@ -163,6 +167,7 @@ ec_eval_code = [
     RestoreMstmt('unev2'),
     RestoreMstmt('unev'),
     RestoreMstmt('env'),
+    # the evil list mutation, because of this argl must be recreated from op in every call
     PerformMstmt(OpMxpr('append_val_list', [RegMxpr('argl'), RegMxpr('val')])),
     AssignMstmt('unev3', OpMxpr('+', [RegMxpr('unev3'), ConstMxpr(NumberVal(1))])),
     GotoMstmt(LabelMxpr('ev-call-operand-start')),
@@ -237,7 +242,8 @@ def ec_eval_symbol(expr: SymbolExpr, env: Environment):
 
 
 def ec_eval_expr_invalid(expr: Expression):
-    return 'expression type undefined: %s' % get_expr_type(expr)
+    message = 'expression type undefined: %s' % get_expr_type(expr).value
+    return StringVal(message)
 
 
 def ec_eval_call_invalid(expr: CallExpr, operator: SchemeVal):
@@ -291,6 +297,11 @@ def get_proc_plain_val_body(proc: ProcPlainVal):
     return proc.body
 
 
+def init_val_list():
+    ls: List[SchemeVal] = []
+    return ls
+
+
 def append_val_list(vals: List[SchemeVal], val: SchemeVal):
     vals.append(val)
 
@@ -329,6 +340,7 @@ def install_ec_operations():
         'get_call_operator': get_call_operator,
         'get_call_operands': get_call_operands,
         'get_proc_plain_val_body': get_proc_plain_val_body,
+        'init_val_list': init_val_list,
         'append_val_list': append_val_list,
         'get_val_type': get_val_type,
         'call_prim': call_prim,
@@ -407,6 +419,10 @@ def test():
         ''',
         result='#t',
         panic=''
+    )
+    test_one(
+        '((lambda (x) (+ x 1)) 2)',
+        result='3',
     )
 
 
