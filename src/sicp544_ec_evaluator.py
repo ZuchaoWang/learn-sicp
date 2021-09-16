@@ -606,10 +606,13 @@ def test_one(source: str, **kargs: str):
     print('----------')
 
 
-def test_one_recursion(source_tmpl: str, nrng: Tuple[int, int], get_val: Callable[[int], int]):
+def test_one_recursion(source_tmpl: str, name: str, nrng: Tuple[int, int], get_val: Callable[[int], int]):
+    print('%s (%d, %d)' % (name, nrng[0], nrng[1]))
+    source_tmpl = source_tmpl.strip()
+    print(source_tmpl)
     for nval in range(*nrng):
         # source
-        source = (source_tmpl.strip()) % nval
+        source = source_tmpl % nval
 
         try:
             # scan
@@ -705,6 +708,13 @@ def test_expr():
     )
 
 
+def factorial(n: int):
+    product = 1
+    for i in range(1, n+1):
+        product *= i
+    return product
+
+
 def test_recursion():
     # recursion
     test_one_recursion(
@@ -715,8 +725,9 @@ def test_recursion():
             (* n (factorial (- n 1)))))
         (factorial %d)
         ''',
+        name='factorial-recur',
         nrng=(1,10),
-        get_val=None
+        get_val=factorial
     )
     # iteration
     test_one_recursion(
@@ -730,8 +741,9 @@ def test_recursion():
           (fact-iter 1 1))
         (factorial %d)
         ''',
+        name='factorial-iter',
         nrng=(1,10),
-        get_val=None
+        get_val=factorial
     )
 
 
