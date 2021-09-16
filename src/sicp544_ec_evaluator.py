@@ -4,7 +4,7 @@ we lack the mechanism to write it in a modular way in machine language
 unless we generate the code using python, but that will make the code hard to read
 '''
 
-from typing import List, Union
+from typing import Callable, List, Tuple, Union
 from sicp414_evaluator import AndExpr, BooleanVal, CallExpr, DefineVarExpr, Environment, Expression, GenericExpr, GenericVal, IfExpr, \
     NilVal, NotExpr, NumberVal, OrExpr, PairVal, PrimVal, ProcPlainVal, ProcVal, SchemeEnvError, SchemePanic, SchemePrimError, \
     SchemeRuntimeError, SchemeVal, SequenceExpr, SetExpr, StringVal, SymbolExpr, UndefVal, install_is_equal_rules, \
@@ -17,6 +17,7 @@ from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, La
     PerformMstmt, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, \
     install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, \
     make_machine, make_run_machine, update_operations
+from sicp524_monitor import MachineStatistic, monitor_statistics
 
 # fmt: off
 ec_eval_code = [
@@ -355,6 +356,7 @@ ec_eval_code = [
     GotoMstmt(LabelMxpr('eval-dispatch')),
   LabelMstmt('ev-not-ret'), 
     AssignMstmt('val', OpMxpr('boolean_not', [RegMxpr('val')])),
+    RestoreMstmt('continue'),
     GotoMstmt(RegMxpr('continue')),
 
     # handling of all errors are the same
@@ -404,7 +406,7 @@ def ec_eval_call_invalid(expr: CallExpr, operator: SchemeVal):
 def ec_check_prim_arity(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
     try:
         pure_check_prim_arity(expr, operator, operands)
-        return NilVal()
+        return UndefVal()
     except SchemeRuntimeError as err:
         return StringVal(str(err))
 
@@ -412,7 +414,7 @@ def ec_check_prim_arity(expr: CallExpr, operator: PrimVal, operands: List[Scheme
 def ec_check_proc_arity(expr: CallExpr, operator: ProcVal, operands: List[SchemeVal]):
     try:
         pure_check_proc_arity(expr, operator, operands)
-        return NilVal()
+        return UndefVal()
     except SchemeRuntimeError as err:
         return StringVal(str(err))
 
@@ -604,21 +606,60 @@ def test_one(source: str, **kargs: str):
     print('----------')
 
 
-def test():
+def test_one_recursion(source_tmpl: str, nrng: Tuple[int, int], get_val: Callable[[int], int]):
+    for nval in range(*nrng):
+        # source
+        source = (source_tmpl.strip()) % nval
+
+        try:
+            # scan
+            tokens = scan_source(source)
+
+            # parse
+            combos = parse_tokens(tokens)
+            expr = parse_expr(combos)
+
+            # build machine
+            ops = get_operations()
+            glbenv = make_global_env()
+            machine = make_machine(ec_eval_regs, ops, ec_eval_code)
+            statistics = MachineStatistic()
+            monitor_statistics(machine.instructions, machine.state, statistics)
+            machine.state.regs.update({'expr': expr, 'env': glbenv})
+            execute_machine = make_run_machine(lambda _: False)
+
+            # result
+            init_machine_pc(machine)
+            execute_machine(machine)
+            res = machine.state.regs['val']
+            res_str = stringify_value(res)
+            assert res_str == str(get_val(nval))
+
+            print('n = %d, val = %s, total_insts = %d, stack_ops = %d, stack_depth = %d' %
+                  (nval, res_str, statistics.total_insts, statistics.stack_ops, statistics.stack_depth))
+
+        except SchemePanic as err:
+            # any kind of panic
+            print('* panic: %s' % err.message)
+            assert False
+    print('----------')
+
+
+def test_error():
     test_one(
         'x',
         panic='runtime error at SYMBOL:x in line 1: symbol undefined'
     )
     test_one(
         '''
-        ()
-        1
-        "2"
-        #t
+        (define (f a b . c) c)
+        (f 1)
         ''',
-        result='#t',
-        panic=''
+        panic='runtime error at LEFT_PAREN in line 2: f expect at least 2 arguments, only get 1'
     )
+
+
+def test_expr():
     test_one(
         '((lambda (x) (+ x 1)) 2)',
         result='3',
@@ -631,8 +672,66 @@ def test():
         result='3',
     )
     test_one(
-        '(if #t 1 2)',
-        result='1',
+        '(if #t (if 3 4) 2)',
+        result='4',
+    )
+    test_one(
+        '(and (+ 1 2) (or (not #t) (list 3 4)))',
+        result='(3 4)',
+    )
+    test_one(
+        '''
+        (define a 1)
+        (define (incr)
+          (set! a (+ a 1)))
+        (incr)
+        (incr)
+        ''',
+        result='3'
+    )
+    test_one(
+        '''
+        (define a '(2 3 4))
+        (define b (cons 1 a))
+        (display (car b))
+        (newline)
+        (display (cdr b))
+        (newline)
+        (display (cdr (cdr b)))
+        (length b)
+        ''',
+        output='1\n(2 3 4)\n(3 4)',
+        result='4'
+    )
+
+
+def test_recursion():
+    # recursion
+    test_one_recursion(
+        '''
+        (define (factorial n)
+          (if (= n 1)
+            1
+            (* n (factorial (- n 1)))))
+        (factorial %d)
+        ''',
+        nrng=(1,10),
+        get_val=None
+    )
+    # iteration
+    test_one_recursion(
+        '''
+        (define (factorial n)
+          (define (fact-iter product counter)
+            (if (> counter n)
+               product
+               (fact-iter (* counter product)
+                 (+ counter 1))))
+          (fact-iter 1 1))
+        (factorial %d)
+        ''',
+        nrng=(1,10),
+        get_val=None
     )
 
 
@@ -646,6 +745,12 @@ def install_rules():
     install_assemble_mstmt_rules()
     install_operations()
     install_ec_operations()
+
+
+def test():
+    test_error()
+    test_expr()
+    test_recursion()
 
 
 if __name__ == '__main__':
