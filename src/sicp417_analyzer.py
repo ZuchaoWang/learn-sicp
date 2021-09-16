@@ -137,8 +137,8 @@ class ProcAnalyzedVal(ProcVal):
         self.body = body
 
 
-def pure_eval_call_proc_analyzed(expr: CallExpr, operator: ProcAnalyzedVal, operands: List[SchemeVal]):
-    pure_check_proc_arity(expr, operator, operands)
+def pure_eval_call_proc_analyzed(paren: Token, operator: ProcAnalyzedVal, operands: List[SchemeVal]):
+    pure_check_proc_arity(paren, operator, operands)
     new_env = pure_eval_call_proc_extend_env(operator, operands)
     return operator.body(new_env)
 
@@ -152,11 +152,11 @@ def analyze_call(expr: CallExpr, analyze: AnalRecurFuncType):
         operator = operator_evl(env)
         operands = [evl(env) for evl in operand_evls]
         if isinstance(operator, PrimVal):
-            return pure_eval_call_prim(expr, operator, operands)
+            return pure_eval_call_prim(expr.paren, operator, operands)
         elif isinstance(operator, ProcAnalyzedVal):
-            return pure_eval_call_proc_analyzed(expr, operator, operands)
+            return pure_eval_call_proc_analyzed(expr.paren, operator, operands)
         else:
-            return pure_eval_call_invalid(expr, operator)
+            return pure_eval_call_invalid(expr.paren, operator)
     return _evaluate
 
 

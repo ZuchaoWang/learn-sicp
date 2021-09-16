@@ -130,8 +130,8 @@ def lazy_resolved_eval_sequence(expr: SequenceExpr, env: Environment, evl: EvalR
     return res
 
 
-def pure_lazy_resolved_eval_call_proc_plain(expr: CallExpr, operator: ProcPlainVal, operands: List[SchemeVal], evl: EvalRecurFuncType):
-    pure_check_proc_arity(expr, operator, operands)
+def pure_lazy_resolved_eval_call_proc_plain(paren: Token, operator: ProcPlainVal, operands: List[SchemeVal], evl: EvalRecurFuncType):
+    pure_check_proc_arity(paren, operator, operands)
     new_env = pure_eval_call_proc_extend_env(operator, operands)
     # only change
     return evl(operator.body, new_env)
@@ -144,11 +144,11 @@ def lazy_resolved_eval_call(expr: CallExpr, env: Environment, evl: EvalRecurFunc
     operator_forced = force(operator, evl)
     if isinstance(operator_forced, PrimVal):
         operands_forced = [force(op, evl) for op in operands]
-        return pure_eval_call_prim(expr, operator_forced, operands_forced)
+        return pure_eval_call_prim(expr.paren, operator_forced, operands_forced)
     elif isinstance(operator_forced, ProcPlainVal):
-        return pure_lazy_resolved_eval_call_proc_plain(expr, operator_forced, operands, evl)
+        return pure_lazy_resolved_eval_call_proc_plain(expr.paren, operator_forced, operands, evl)
     else:
-        return pure_eval_call_invalid(expr, operator_forced)
+        return pure_eval_call_invalid(expr.paren, operator_forced)
 
 
 @resolved_eval_rule_decorator

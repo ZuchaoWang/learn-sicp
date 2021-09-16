@@ -277,13 +277,13 @@ def amb_eval_call(expr: CallExpr, env: Environment, succeed: AmbEvalSuceedFuncTy
     def _succeed_operator(operator: SchemeVal):
         def _succeed_operands(operands: List[SchemeVal]):
             if isinstance(operator, PrimVal):
-                succeed(pure_eval_call_prim(expr, operator, operands))
+                succeed(pure_eval_call_prim(expr.paren, operator, operands))
             elif isinstance(operator, ProcPlainVal):
-                pure_check_proc_arity(expr, operator, operands)
+                pure_check_proc_arity(expr.paren, operator, operands)
                 new_env = pure_eval_call_proc_extend_env(operator, operands)
                 amb_eval(operator.body, new_env, succeed)
             else:
-                succeed(pure_eval_call_invalid(expr, operator))
+                succeed(pure_eval_call_invalid(expr.paren, operator))
         pure_amb_eval_list(expr.operands, env,
                            _succeed_operands, amb_eval, None)
     amb_eval(expr.operator, env, _succeed_operator)

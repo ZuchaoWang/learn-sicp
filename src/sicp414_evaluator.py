@@ -1528,16 +1528,12 @@ def eval_sequence(expr: SequenceExpr, env: Environment, evl: EvalRecurFuncType):
     return res
 
 
-def pure_eval_symbol(expr: SymbolExpr, env: Environment):
+@eval_rule_decorator
+def eval_symbol(expr: SymbolExpr, env: Environment):
     try:
         return env_lookup(env, expr.name.literal)
     except SchemeEnvError:
         raise SchemeRuntimeError(expr.name, 'symbol undefined')
-
-
-@eval_rule_decorator
-def eval_symbol(expr: SymbolExpr, env: Environment):
-    return pure_eval_symbol(expr, env)
 
 
 def pure_eval_string(expr: StringExpr):
@@ -1586,29 +1582,29 @@ def eval_quote(expr: QuoteExpr):
     return pure_eval_quote(expr)
 
 
-def pure_check_arity(expr: CallExpr, name: str, pos_arity: int, has_rest: bool, arg_count: int):
+def pure_check_arity(paren: Token, name: str, pos_arity: int, has_rest: bool, arg_count: int):
     if has_rest:
         if arg_count < pos_arity:
-            raise SchemeRuntimeError(expr.paren, '%s expect at least %d arguments, only get %d' % (name, pos_arity, arg_count))
+            raise SchemeRuntimeError(paren, '%s expect at least %d arguments, only get %d' % (name, pos_arity, arg_count))
     else:
         if arg_count != pos_arity:
-            raise SchemeRuntimeError(expr.paren, '%s expect exactly %d arguments, but get %d' % (name, pos_arity, arg_count))
+            raise SchemeRuntimeError(paren, '%s expect exactly %d arguments, but get %d' % (name, pos_arity, arg_count))
 
 
-def pure_check_prim_arity(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
-    pure_check_arity(expr, operator.name, operator.pos_arity, operator.has_rest, len(operands))
+def pure_check_prim_arity(paren: Token, operator: PrimVal, operands: List[SchemeVal]):
+    pure_check_arity(paren, operator.name, operator.pos_arity, operator.has_rest, len(operands))
 
 
-def pure_eval_call_prim(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
-    pure_check_prim_arity(expr, operator, operands)
+def pure_eval_call_prim(paren: Token, operator: PrimVal, operands: List[SchemeVal]):
+    pure_check_prim_arity(paren, operator, operands)
     try:
         return operator.body(*operands)
     except SchemePrimError as err:
-        raise SchemeRuntimeError(expr.paren, err.message)
+        raise SchemeRuntimeError(paren, err.message)
 
 
-def pure_check_proc_arity(expr: CallExpr, operator: ProcVal, operands: List[SchemeVal]):
-    pure_check_arity(expr, operator.name, len(operator.pos_paras), operator.rest_para is not None, len(operands))
+def pure_check_proc_arity(paren: Token, operator: ProcVal, operands: List[SchemeVal]):
+    pure_check_arity(paren, operator.name, len(operator.pos_paras), operator.rest_para is not None, len(operands))
 
 
 def pure_eval_call_proc_extend_env(operator: ProcVal, operands: List[SchemeVal]):
@@ -1621,15 +1617,15 @@ def pure_eval_call_proc_extend_env(operator: ProcVal, operands: List[SchemeVal])
     return env_extend(operator.env, parameters, arguments)
 
 
-def pure_eval_call_proc_plain(expr: CallExpr, operator: ProcPlainVal, operands: List[SchemeVal], evl: EvalRecurFuncType):
-    pure_check_proc_arity(expr, operator, operands)
+def pure_eval_call_proc_plain(paren: Token, operator: ProcPlainVal, operands: List[SchemeVal], evl: EvalRecurFuncType):
+    pure_check_proc_arity(paren, operator, operands)
     new_env = pure_eval_call_proc_extend_env(operator, operands)
     return evl(operator.body, new_env)
 
 
-def pure_eval_call_invalid(expr: CallExpr, operator: SchemeVal):
+def pure_eval_call_invalid(token: Token, operator: SchemeVal):
     raise SchemeRuntimeError(
-        expr.paren, 'cannot call %s value' % type(operator).__name__)
+        token, 'cannot call %s value' % type(operator).__name__)
 
 
 @eval_rule_decorator
@@ -1637,26 +1633,26 @@ def eval_call(expr: CallExpr, env: Environment, evl: EvalRecurFuncType):
     operator = evl(expr.operator, env)
     operands = [evl(subexpr, env) for subexpr in expr.operands]
     if isinstance(operator, PrimVal):
-        return pure_eval_call_prim(expr, operator, operands)
+        return pure_eval_call_prim(expr.paren, operator, operands)
     elif isinstance(operator, ProcPlainVal):
-        return pure_eval_call_proc_plain(expr, operator, operands, evl)
+        return pure_eval_call_proc_plain(expr.paren, operator, operands, evl)
     else:
-        return pure_eval_call_invalid(expr, operator)
+        return pure_eval_call_invalid(expr.paren, operator)
 
 
-def pure_eval_set(expr: SetExpr, initializer: SchemeVal, env: Environment):
+def pure_eval_set(name: Token, initializer: SchemeVal, env: Environment):
     try:
-        env_set(env, expr.name.literal, initializer)
+        env_set(env, name.literal, initializer)
         return initializer
     except SchemeEnvError:
-        raise SchemeRuntimeError(expr.name, 'symbol undefined')
+        raise SchemeRuntimeError(name, 'symbol undefined')
 
 
 @eval_rule_decorator
 def eval_set(expr: SetExpr, env: Environment, evl: EvalRecurFuncType):
     '''return the value just set'''
     initializer = evl(expr.initializer, env)
-    return pure_eval_set(expr, initializer, env)
+    return pure_eval_set(expr.name, initializer, env)
 
 
 def pure_eval_define_var(expr: DefineVarExpr, initializer: SchemeVal, env: Environment):
