@@ -309,7 +309,7 @@ def amb_eval_set(expr: SetExpr, env: Environment, succeed: AmbEvalSuceedFuncType
 @amb_eval_rule_decorator
 def amb_eval_define_var(expr: DefineVarExpr, env: Environment, succeed: AmbEvalSuceedFuncType, amb_eval: AmbEvalRecurFuncType):
     def _succeed_initializer(initializer: SchemeVal):
-        succeed(pure_eval_define_var(expr.name, initializer, env))
+        succeed(pure_eval_define_var(expr, initializer, env))
     amb_eval(expr.initializer, env, _succeed_initializer)
 
 

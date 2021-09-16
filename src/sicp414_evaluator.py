@@ -1644,24 +1644,24 @@ def eval_call(expr: CallExpr, env: Environment, evl: EvalRecurFuncType):
         return pure_eval_call_invalid(expr, operator)
 
 
-def pure_eval_set(name: Token, initializer: SchemeVal, env: Environment):
+def pure_eval_set(expr: SetExpr, initializer: SchemeVal, env: Environment):
     try:
-        env_set(env, name.literal, initializer)
+        env_set(env, expr.name.literal, initializer)
         return initializer
     except SchemeEnvError:
-        raise SchemeRuntimeError(name, 'symbol undefined')
+        raise SchemeRuntimeError(expr.name, 'symbol undefined')
 
 
 @eval_rule_decorator
 def eval_set(expr: SetExpr, env: Environment, evl: EvalRecurFuncType):
     '''return the value just set'''
     initializer = evl(expr.initializer, env)
-    return pure_eval_set(expr.name, initializer, env)
+    return pure_eval_set(expr, initializer, env)
 
 
-def pure_eval_define_var(name: Token, initializer: SchemeVal, env: Environment):
-    env_define(env, name.literal, initializer)
-    return SymbolVal(name.literal)
+def pure_eval_define_var(expr: DefineVarExpr, initializer: SchemeVal, env: Environment):
+    env_define(env, expr.name.literal, initializer)
+    return SymbolVal(expr.name.literal)
 
 
 def pure_eval_define_proc_plain(expr: DefineProcExpr, env: Environment):
@@ -1674,7 +1674,7 @@ def pure_eval_define_proc_plain(expr: DefineProcExpr, env: Environment):
 def eval_define_var(expr: DefineVarExpr, env: Environment, evl: EvalRecurFuncType):
     '''return the symbol defined'''
     initializer = evl(expr.initializer, env)
-    return pure_eval_define_var(expr.name, initializer, env)
+    return pure_eval_define_var(expr, initializer, env)
 
 
 @eval_rule_decorator

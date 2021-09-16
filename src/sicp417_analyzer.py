@@ -176,7 +176,7 @@ def analyze_define_var(expr: DefineVarExpr, analyze: AnalRecurFuncType):
 
     def _evaluate(env: Environment):
         initializer = initializer_evl(env)
-        return pure_eval_define_var(expr.name, initializer, env)
+        return pure_eval_define_var(expr, initializer, env)
     return _evaluate
 
 
