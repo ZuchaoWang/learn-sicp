@@ -1794,7 +1794,7 @@ def make_prim_num2_num(py_func: Callable[[float, float], float]):
     def _prim_num2_num(x: SchemeVal, y: SchemeVal) -> SchemeVal:
         if not isinstance(x, NumberVal) or not isinstance(y, NumberVal):
             raise SchemePrimError('%s requires both operators to be numbers, now %s and %s' % (
-                py_func.__name__, type(x), type(y)))
+                py_func.__name__, type(x).__name__, type(y).__name__))
         x = cast(NumberVal, x)
         y = cast(NumberVal, y)
         res = py_func(x.value, y.value)
@@ -1812,7 +1812,7 @@ def make_prim_num2_bool(py_func: Callable[[float, float], bool]):
     def _prim_num2_bool(x: SchemeVal, y: SchemeVal) -> SchemeVal:
         if not isinstance(x, NumberVal) or not isinstance(y, NumberVal):
             raise SchemePrimError('%s requires both operators to be numbers, now %s and %s' % (
-                py_func.__name__, type(x), type(y)))
+                py_func.__name__, type(x).__name__, type(y).__name__))
         x = cast(NumberVal, x)
         y = cast(NumberVal, y)
         res = py_func(x.value, y.value)

@@ -1,19 +1,54 @@
 '''
-this is mostly machine language code, see ec_eval_code
-we lack the mechanism to write it in a modular way in machine language
+explicit control evaluator
+build a machine that can evaluate any scheme program
+we skip the parsing part, instead we reuse parser in sicp414_evaluator to generate expressions
+we feed our machine with expressions and resolved distances
+
+we allocate a special register "dist" to hold resolved distances
+this register will stay constant after initialization
+we also have two more temporary registers "unev2" and "unev3"
+mainly because we use python list instead of scheme linked list
+and traversing the python list need more local variables
+
+our ec evalutor is written in machine language code, see ec_eval_code
+we also skip parsing, so our code is written in instruction structures
+we lack the mechanism to write the evaluator in a modular way in machine language
 unless we generate the code using python, but that will make the code hard to read
+
+we use a lot of high level operations, making it less similar to assembly
+we should consider them as specialized hardware
+but some are just selector, which we may just use python getattr
+for environment related operations, we tend to use simple ones like env_set, instead of pure_eval_set
+this is to be consistent with our compiler, which should not use any operation involving expression
+
+error reporting is achieved by special return value
+for those operations that can fail, instead of purely returning result, we return pair(error, result)
+then we extract "error" via car, test/branch on it
+to print error message, we need token to get its position in source code
+we acquire the token from the expression itself using get_var_name_token and get_paren_token
+
+in recursion test, factorial iteration use constant max stack depth (16)
+this shows our tail recursion support is correctly implemented
+to support that we need to ensure the last operation in procedure/primitive call is recursive expression evaluation
+no more restore or assignment should come after that
+
+from the result we can see running a factorial using ec evaluator needs 100x more instructions
+than handcrafted machine in sicp524_monitor, excessive work includes:
+operator and every operands is a expression, requiring evaluation; in sicp524_monitor they are just constant;
+all operands need to form a list and put into argl; in sicp524_monitor they are fed directly;
+stack operations, error checking for arity and primitive also consumes lots of instructions
 '''
 
 from typing import Callable, List, Tuple, Union
 from sicp414_evaluator import AndExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, Environment, \
     GenericExpr, GenericVal, IfExpr, NotExpr, NumberVal, OrExpr, PairVal, PrimVal, ProcPlainVal, ProcVal, \
     SchemeEnvError, SchemePanic, SchemePrimError, SchemeRuntimeError, SchemeVal, SequenceExpr, SetExpr, \
-    StringVal, SymbolExpr, SymbolVal, Token, UndefVal, env_define, env_extend, env_lookup, env_set, install_is_equal_rules, \
-    install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, is_truthy, \
-    make_global_env, parse_expr, parse_tokens, pure_eval_boolean, \
-    pure_eval_call_invalid, pure_eval_call_proc_extend_env, pure_eval_define_proc_plain_value, pure_eval_define_var, \
-    pure_eval_lambda_plain, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, pure_get_proc_arguments, pure_get_proc_parameters, \
-    scan_source, scheme_flush, scheme_panic, stringify_value
+    StringVal, SymbolExpr, SymbolVal, Token, UndefVal, env_define, env_extend, install_is_equal_rules, \
+    install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, \
+    is_truthy, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_define_proc_plain_value, \
+    pure_eval_define_var, pure_eval_lambda_plain, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, \
+    pure_get_proc_arguments, pure_get_proc_parameters, scan_source, scheme_flush, scheme_panic, stringify_value
+from sicp416_resolver import ResDistancesType, env_lookup_at, env_set_at, install_resolver_rules, resolve_expr
 from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, OpMxpr, \
     PerformMstmt, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, \
     install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, \
@@ -90,8 +125,10 @@ ec_eval_code = [
 
   LabelMstmt('ev-symbol'),
     AssignMstmt('unev', OpMxpr('get_var_name', [RegMxpr('expr')])),
+    # unev2 = distance
+    AssignMstmt('unev2', OpMxpr('get_distance', [RegMxpr('dist'), RegMxpr('expr')])),
     # val = pair(error, result)
-    AssignMstmt('val', OpMxpr('ec_env_lookup', [RegMxpr('env'), RegMxpr('unev')])),
+    AssignMstmt('val', OpMxpr('ec_env_lookup_at', [RegMxpr('env'), RegMxpr('unev2'), RegMxpr('unev')])),
     # unev = error
     AssignMstmt('unev', OpMxpr('car', [RegMxpr('val')])),
     TestMstmt(OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(UndefVal())])),
@@ -204,7 +241,7 @@ ec_eval_code = [
 
   LabelMstmt('ev-call-invalid'),  
     AssignMstmt('unev', OpMxpr('get_paren_token', [RegMxpr('expr')])),
-    AssignMstmt('val', OpMxpr('ec_eval_call_invalid', [RegMxpr('expr'), RegMxpr('proc')])),
+    AssignMstmt('val', OpMxpr('ec_eval_call_invalid', [RegMxpr('proc')])),
     AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
     GotoMstmt(LabelMxpr('error-unknown-operator-type')),
 
@@ -284,7 +321,9 @@ ec_eval_code = [
     RestoreMstmt('expr'),
     # unev = name
     AssignMstmt('unev', OpMxpr('get_var_name', [RegMxpr('expr')])),
-    AssignMstmt('val', OpMxpr('ec_env_set', [RegMxpr('env'), RegMxpr('unev'), RegMxpr('val')])),
+    # unev2 = distance
+    AssignMstmt('unev2', OpMxpr('get_distance', [RegMxpr('dist'), RegMxpr('expr')])),
+    AssignMstmt('val', OpMxpr('ec_env_set_at', [RegMxpr('env'), RegMxpr('unev2'), RegMxpr('unev'), RegMxpr('val')])),
     AssignMstmt('unev', OpMxpr('car', [RegMxpr('val')])),
     TestMstmt(OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(UndefVal())])),
     BranchMstmt(LabelMxpr('ev-set-ok')),
@@ -416,10 +455,14 @@ def concat_token_message(token: Token, message: StringVal):
     return StringVal(str(rt_err))
 
 
-def ec_env_lookup(env: Environment, name: StringVal):
+def get_distance(distances: ResDistancesType, expr: Union[SymbolExpr, SetExpr]):
+    return NumberVal(distances[expr])
+
+
+def ec_env_lookup_at(env: Environment, distance: NumberVal, name: StringVal):
     '''return error and result'''
     try:
-        return PairVal(UndefVal(), env_lookup(env, name.value))
+        return PairVal(UndefVal(), env_lookup_at(env, int(distance.value), name.value))
     except SchemeEnvError:
         return PairVal(StringVal('symbol undefined'), UndefVal())
 
@@ -429,11 +472,8 @@ def ec_eval_expr_invalid(expr_type: StringVal):
     return StringVal(message)
 
 
-def ec_eval_call_invalid(paren: Token, operator: SchemeVal):
-    try:
-        pure_eval_call_invalid(paren, operator)
-    except SchemeRuntimeError as err:
-        return StringVal(str(err))
+def ec_eval_call_invalid(operator: SchemeVal):
+    return StringVal('cannot call %s value' % type(operator).__name__)
 
 
 def _ec_check_arity(name: str, pos_arity: int, has_rest: bool, arg_count: int):
@@ -550,9 +590,9 @@ def get_var_init(expr: Union[SetExpr, DefineVarExpr]):
     return expr.initializer
 
 
-def ec_env_set(env: Environment, name: StringVal, initializer: SchemeVal):
+def ec_env_set_at(env: Environment, distance: NumberVal, name: StringVal, initializer: SchemeVal):
     try:
-        env_set(env, name.value, initializer)
+        env_set_at(env, int(distance.value), name.value, initializer)
         return PairVal(UndefVal(), initializer)
     except SchemeEnvError:
         return PairVal(StringVal('symbol undefined'), UndefVal())
@@ -596,7 +636,6 @@ def install_ec_operations():
         'pure_eval_nil': pure_eval_nil,
         'pure_eval_quote': pure_eval_quote,
         'pure_eval_lambda_plain': pure_eval_lambda_plain,
-        'pure_eval_call_proc_extend_env': pure_eval_call_proc_extend_env,
         'pure_eval_define_var': pure_eval_define_var,
         'goto_panic': goto_panic,
 
@@ -625,10 +664,11 @@ def install_ec_operations():
         'get_var_name': get_var_name,
         'get_var_symbol': get_var_symbol,
         'get_var_init': get_var_init,
-        'ec_env_set': ec_env_set,
+        'ec_env_set_at': ec_env_set_at,
         'ec_env_define': ec_env_define,
-        'ec_env_lookup': ec_env_lookup,
+        'ec_env_lookup_at': ec_env_lookup_at,
         'ec_env_extend': ec_env_extend,
+        'get_distance': get_distance,
         'ec_define_proc_plain_val': ec_define_proc_plain_val,
         'ec_eval_expr_invalid': ec_eval_expr_invalid,
         'ec_eval_call_invalid': ec_eval_call_invalid,
@@ -639,7 +679,10 @@ def install_ec_operations():
     update_operations(ops)
 
 
-'''we have more tmp registers: unev2, unev3'''
+'''
+we have two more tmp registers: unev2, unev3
+we also have dist register to hold resolution distances
+'''
 ec_eval_regs = {
     'val': None,
     'expr': None,
@@ -647,6 +690,7 @@ ec_eval_regs = {
     'unev': None,
     'unev2': None,
     'unev3': None,
+    'dist': None
 }
 
 
@@ -663,11 +707,15 @@ def test_one(source: str, **kargs: str):
         combos = parse_tokens(tokens)
         expr = parse_expr(combos)
 
+        # resolve
+        distances = resolve_expr(expr)
+
         # build machine
         ops = get_operations()
         glbenv = make_global_env()
         machine = make_machine(ec_eval_regs, ops, ec_eval_code)
-        machine.state.regs.update({'expr': expr, 'env': glbenv})
+        machine.state.regs.update(
+            {'expr': expr, 'env': glbenv, 'dist': distances})
         execute_machine = make_run_machine(lambda _: False)
 
         # result
@@ -707,13 +755,17 @@ def test_one_recursion(source_tmpl: str, name: str, nrng: Tuple[int, int], get_v
             combos = parse_tokens(tokens)
             expr = parse_expr(combos)
 
+            # resolve
+            distances = resolve_expr(expr)
+
             # build machine
             ops = get_operations()
             glbenv = make_global_env()
             machine = make_machine(ec_eval_regs, ops, ec_eval_code)
             statistics = MachineStatistic()
             monitor_statistics(machine.instructions, machine.state, statistics)
-            machine.state.regs.update({'expr': expr, 'env': glbenv})
+            machine.state.regs.update(
+                {'expr': expr, 'env': glbenv, 'dist': distances})
             execute_machine = make_run_machine(lambda _: False)
 
             # result
@@ -744,6 +796,17 @@ def test_error():
         (f 1)
         ''',
         panic='runtime error at LEFT_PAREN in line 2: f expect at least 2 arguments, only get 1'
+    )
+    test_one(
+        '''
+        (define f "not_an_op")
+        (f 1 2)
+        ''',
+        panic='runtime error at LEFT_PAREN in line 2: cannot call StringVal value'
+    )
+    test_one(
+        '(+ "1" "2")',
+        panic='runtime error at LEFT_PAREN in line 1: <lambda> requires both operators to be numbers, now StringVal and StringVal'
     )
 
 
@@ -793,6 +856,42 @@ def test_expr():
     )
 
 
+def test_resolve():
+    # use before intialization in different scopes pass resolution
+    test_one(
+        '''
+        (define (f)
+          (define (g) x)
+          (define x 1)
+          (g))
+        (f)
+        ''',
+        result='1'
+    )
+    # local variable shadows outer definitions
+    test_one(
+        '''
+        (define x 1)
+        (define (f)
+          (define x 2)
+          x)
+        (f)
+        ''',
+        result='2'
+    )
+    # mutual recursion ok, even in local scope
+    test_one(
+        '''
+        (define (f)
+          (define (even n) (if (= n 0) #t (odd (- n 1))))
+          (define (odd n) (if (= n 0) #f (even (- n 1))))
+          (even 5))
+        (f)
+        ''',
+        result='#f'
+    )
+
+
 def factorial(n: int):
     product = 1
     for i in range(1, n+1):
@@ -814,7 +913,7 @@ def test_recursion():
         nrng=(1, 10),
         get_val=factorial
     )
-    # iteration
+    # iteration, should use constant stack depth
     test_one_recursion(
         '''
         (define (factorial n)
@@ -837,6 +936,7 @@ def install_rules():
     install_stringify_expr_rules()
     install_stringify_value_rules()
     install_is_equal_rules()
+    install_resolver_rules()
     install_primitives()
     install_assemble_mxpr_rules()
     install_assemble_mstmt_rules()
@@ -847,6 +947,7 @@ def install_rules():
 def test():
     test_error()
     test_expr()
+    test_resolve()
     test_recursion()
 
 
