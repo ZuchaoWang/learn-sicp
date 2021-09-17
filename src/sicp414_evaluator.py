@@ -1607,13 +1607,25 @@ def pure_check_proc_arity(paren: Token, operator: ProcVal, operands: List[Scheme
     pure_check_arity(paren, operator.name, len(operator.pos_paras), operator.rest_para is not None, len(operands))
 
 
-def pure_eval_call_proc_extend_env(operator: ProcVal, operands: List[SchemeVal]):
+def pure_get_proc_parameters(operator: ProcVal):
     if operator.rest_para is None:
         parameters = operator.pos_paras
-        arguments = operands
     else:
         parameters = [*operator.pos_paras, operator.rest_para]
+    return parameters
+
+
+def pure_get_proc_arguments(operator: ProcVal, operands: List[SchemeVal]):
+    if operator.rest_para is None:
+        arguments = operands
+    else:
         arguments = [*operands[:len(operator.pos_paras)], pair_from_list_val(operands[len(operator.pos_paras):], NilVal())]
+    return arguments
+
+
+def pure_eval_call_proc_extend_env(operator: ProcVal, operands: List[SchemeVal]):
+    parameters = pure_get_proc_parameters(operator)
+    arguments = pure_get_proc_arguments(operator, operands)
     return env_extend(operator.env, parameters, arguments)
 
 
@@ -1655,28 +1667,27 @@ def eval_set(expr: SetExpr, env: Environment, evl: EvalRecurFuncType):
     return pure_eval_set(expr.name, initializer, env)
 
 
-def pure_eval_define_var(expr: DefineVarExpr, initializer: SchemeVal, env: Environment):
-    env_define(env, expr.name.literal, initializer)
-    return SymbolVal(expr.name.literal)
+def pure_eval_define_var(name: Token, initializer: SchemeVal, env: Environment):
+    env_define(env, name.literal, initializer)
+    return SymbolVal(name.literal)
 
 
-def pure_eval_define_proc_plain(expr: DefineProcExpr, env: Environment):
-    proc_obj = ProcPlainVal(expr.name.literal, [p.literal for p in expr.pos_paras], expr.rest_para.literal if expr.rest_para is not None else None, expr.body, env)
-    env_define(env, expr.name.literal, proc_obj)
-    return SymbolVal(expr.name.literal)
+def pure_eval_define_proc_plain_value(name: str, pos_paras: List[Token], rest_para: Optional[Token], body: SequenceExpr, env: Environment):
+    return ProcPlainVal(name, [p.literal for p in pos_paras], rest_para.literal if rest_para is not None else None, body, env)
 
 
 @eval_rule_decorator
 def eval_define_var(expr: DefineVarExpr, env: Environment, evl: EvalRecurFuncType):
     '''return the symbol defined'''
     initializer = evl(expr.initializer, env)
-    return pure_eval_define_var(expr, initializer, env)
+    return pure_eval_define_var(expr.name, initializer, env)
 
 
 @eval_rule_decorator
 def eval_define_proc(expr: DefineProcExpr, env: Environment):
     '''return the symbol defined'''
-    return pure_eval_define_proc_plain(expr, env)
+    proc_obj = pure_eval_define_proc_plain_value(expr.name.literal, expr.pos_paras, expr.rest_para, expr.body, env)
+    return pure_eval_define_var(expr.name, proc_obj, env)
 
 
 @eval_rule_decorator
@@ -1692,7 +1703,7 @@ def eval_if(expr: IfExpr, env: Environment, evl: EvalRecurFuncType):
 
 
 def pure_eval_lambda_plain(expr: LambdaExpr, env: Environment):
-    return ProcPlainVal('lambda', [p.literal for p in expr.pos_paras], expr.rest_para.literal if expr.rest_para is not None else None, expr.body, env)
+    return pure_eval_define_proc_plain_value('lambda', expr.pos_paras, expr.rest_para, expr.body, env)
 
 
 @eval_rule_decorator

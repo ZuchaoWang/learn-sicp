@@ -8,7 +8,7 @@ from sicp414_evaluator import AndExpr, BooleanExpr, BooleanVal, CallExpr, Define
     SchemeVal, SequenceExpr, SetExpr, StringExpr, SymbolExpr, Token, TokenList, UndefVal, find_type, \
     install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, \
     install_stringify_value_rules, is_truthy, make_global_env, pair_from_list_val, parse_expr, parse_expr_recursive, parse_sub_symbol_token, parse_tokens, \
-    pure_check_proc_arity, pure_eval_boolean, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_call_proc_extend_env, pure_eval_define_proc_plain, \
+    pure_check_proc_arity, pure_eval_boolean, pure_eval_call_invalid, pure_eval_call_prim, pure_eval_call_proc_extend_env, pure_eval_define_proc_plain_value, \
     pure_eval_define_var, pure_eval_lambda_plain, pure_eval_nil, pure_eval_number, pure_eval_string, quote_token_combo, scan_source, scheme_flush, \
     scheme_panic, stringify_expr, stringify_expr_rule_decorator, stringify_value, update_parse_expr_rules, update_stringify_expr_rules
 from sicp416_resolver import ResDistancesType, ResRecurFuncType, env_lookup_at, env_set_at, install_resolver_rules, pure_resolved_eval_set, \
@@ -309,13 +309,14 @@ def amb_eval_set(expr: SetExpr, env: Environment, succeed: AmbEvalSuceedFuncType
 @amb_eval_rule_decorator
 def amb_eval_define_var(expr: DefineVarExpr, env: Environment, succeed: AmbEvalSuceedFuncType, amb_eval: AmbEvalRecurFuncType):
     def _succeed_initializer(initializer: SchemeVal):
-        succeed(pure_eval_define_var(expr, initializer, env))
+        succeed(pure_eval_define_var(expr.name, initializer, env))
     amb_eval(expr.initializer, env, _succeed_initializer)
 
 
 @amb_eval_rule_decorator
 def amb_eval_define_proc(expr: DefineProcExpr, env: Environment, succeed: AmbEvalSuceedFuncType):
-    succeed(pure_eval_define_proc_plain(expr, env))
+    proc_obj = pure_eval_define_proc_plain_value(expr.name.literal, expr.pos_paras, expr.rest_para, expr.body, env)
+    succeed(pure_eval_define_var(expr.name, proc_obj, env))
 
 
 @amb_eval_rule_decorator

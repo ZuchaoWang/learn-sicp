@@ -5,13 +5,14 @@ unless we generate the code using python, but that will make the code hard to re
 '''
 
 from typing import Callable, List, Tuple, Union
-from sicp414_evaluator import AndExpr, BooleanVal, CallExpr, DefineVarExpr, Environment, GenericExpr, GenericVal, IfExpr, \
-    NotExpr, NumberVal, OrExpr, PairVal, PrimVal, ProcPlainVal, ProcVal, SchemeEnvError, SchemePanic, SchemePrimError, \
-    SchemeRuntimeError, SchemeVal, SequenceExpr, SetExpr, StringVal, SymbolExpr, Token, UndefVal, env_lookup, env_set, install_is_equal_rules, \
+from sicp414_evaluator import AndExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, Environment, \
+    GenericExpr, GenericVal, IfExpr, NotExpr, NumberVal, OrExpr, PairVal, PrimVal, ProcPlainVal, ProcVal, \
+    SchemeEnvError, SchemePanic, SchemePrimError, SchemeRuntimeError, SchemeVal, SequenceExpr, SetExpr, \
+    StringVal, SymbolExpr, SymbolVal, Token, UndefVal, env_define, env_extend, env_lookup, env_set, install_is_equal_rules, \
     install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, is_truthy, \
-    make_global_env, parse_expr, parse_tokens, pure_check_prim_arity, pure_check_proc_arity, pure_eval_boolean, \
-    pure_eval_call_invalid, pure_eval_call_proc_extend_env, pure_eval_define_proc_plain, pure_eval_define_var, \
-    pure_eval_lambda_plain, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, \
+    make_global_env, parse_expr, parse_tokens, pure_eval_boolean, \
+    pure_eval_call_invalid, pure_eval_call_proc_extend_env, pure_eval_define_proc_plain_value, pure_eval_define_var, \
+    pure_eval_lambda_plain, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, pure_get_proc_arguments, pure_get_proc_parameters, \
     scan_source, scheme_flush, scheme_panic, stringify_value
 from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, OpMxpr, \
     PerformMstmt, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, \
@@ -96,7 +97,7 @@ ec_eval_code = [
     TestMstmt(OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(UndefVal())])),
     BranchMstmt(LabelMxpr('ev-symbol-no-error')),
     # has error, first val = token, then val = concatenated_message
-    AssignMstmt('val', OpMxpr('get_name_token', [RegMxpr('expr')])),
+    AssignMstmt('val', OpMxpr('get_var_name_token', [RegMxpr('expr')])),
     AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('val'), RegMxpr('unev')])),
     GotoMstmt(LabelMxpr('error-symbol-undefined')),
   LabelMstmt('ev-symbol-no-error'),
@@ -199,29 +200,43 @@ ec_eval_code = [
     BranchMstmt(LabelMxpr('ev-call-proc-plain')),
     TestMstmt(OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(StringVal('PrimVal'))])),
     BranchMstmt(LabelMxpr('ev-call-prim')),
+    GotoMstmt(LabelMxpr('ev-call-invalid')),
+
+  LabelMstmt('ev-call-invalid'),  
+    AssignMstmt('unev', OpMxpr('get_paren_token', [RegMxpr('expr')])),
     AssignMstmt('val', OpMxpr('ec_eval_call_invalid', [RegMxpr('expr'), RegMxpr('proc')])),
+    AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
     GotoMstmt(LabelMxpr('error-unknown-operator-type')),
 
   LabelMstmt('ev-call-proc-plain'),
-    AssignMstmt('val', OpMxpr('ec_check_proc_arity', [RegMxpr('expr'), RegMxpr('proc'), RegMxpr('argl')])),
+    AssignMstmt('val', OpMxpr('ec_check_proc_arity', [RegMxpr('proc'), RegMxpr('argl')])),
     TestMstmt(OpMxpr('equal?', [RegMxpr('val'), ConstMxpr(UndefVal())])),
     BranchMstmt(LabelMxpr('ev-call-proc-plain-arity-ok')),
+    AssignMstmt('unev', OpMxpr('get_paren_token', [RegMxpr('expr')])),
+    AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
     GotoMstmt(LabelMxpr('error-call-arity')),
   LabelMstmt('ev-call-proc-plain-arity-ok'),
-    AssignMstmt('env', OpMxpr('pure_eval_call_proc_extend_env', [RegMxpr('proc'), RegMxpr('argl')])),
+    AssignMstmt('env', OpMxpr('get_proc_env', [RegMxpr('proc')])),
+    AssignMstmt('unev', OpMxpr('get_call_parameters', [RegMxpr('proc')])),
+    AssignMstmt('unev2', OpMxpr('get_call_arguments', [RegMxpr('proc'), RegMxpr('argl')])),
+    AssignMstmt('env', OpMxpr('ec_env_extend', [RegMxpr('env'), RegMxpr('unev'), RegMxpr('unev2')])),
     AssignMstmt('expr', OpMxpr('get_proc_plain_val_body', [RegMxpr('proc')])),
     GotoMstmt(LabelMxpr('ev-sequence')),
 
   LabelMstmt('ev-call-prim'),
-    AssignMstmt('val', OpMxpr('ec_check_prim_arity', [RegMxpr('expr'), RegMxpr('proc'), RegMxpr('argl')])),
+    AssignMstmt('val', OpMxpr('ec_check_prim_arity', [RegMxpr('proc'), RegMxpr('argl')])),
     TestMstmt(OpMxpr('equal?', [RegMxpr('val'), ConstMxpr(UndefVal())])),
     BranchMstmt(LabelMxpr('ev-call-prim-arity-ok')),
+    AssignMstmt('unev', OpMxpr('get_paren_token', [RegMxpr('expr')])),
+    AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
     GotoMstmt(LabelMxpr('error-call-arity')),
   LabelMstmt('ev-call-prim-arity-ok'),
-    AssignMstmt('uenv', OpMxpr('call_prim', [RegMxpr('expr'), RegMxpr('proc'), RegMxpr('argl')])),
+    AssignMstmt('uenv', OpMxpr('call_prim', [RegMxpr('proc'), RegMxpr('argl')])),
     AssignMstmt('val', OpMxpr('car', [RegMxpr('uenv')])), 
     TestMstmt(OpMxpr('equal?', [RegMxpr('val'), ConstMxpr(UndefVal())])),
     BranchMstmt(LabelMxpr('ev-call-prim-call-ok')),
+    AssignMstmt('unev', OpMxpr('get_paren_token', [RegMxpr('expr')])),
+    AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
     GotoMstmt(LabelMxpr('error-call-prim')),
   LabelMstmt('ev-call-prim-call-ok'),
     AssignMstmt('val', OpMxpr('cdr', [RegMxpr('uenv')])), 
@@ -273,7 +288,7 @@ ec_eval_code = [
     AssignMstmt('unev', OpMxpr('car', [RegMxpr('val')])),
     TestMstmt(OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(UndefVal())])),
     BranchMstmt(LabelMxpr('ev-set-ok')),
-    AssignMstmt('val', OpMxpr('get_name_token', [RegMxpr('expr')])),
+    AssignMstmt('val', OpMxpr('get_var_name_token', [RegMxpr('expr')])),
     AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('val'), RegMxpr('unev')])),
     GotoMstmt(LabelMxpr('error-symbol-undefined')),
   LabelMstmt('ev-set-ok'),
@@ -291,11 +306,16 @@ ec_eval_code = [
     RestoreMstmt('continue'),
     RestoreMstmt('env'),
     RestoreMstmt('expr'),
-    AssignMstmt('val', OpMxpr('pure_eval_define_var', [RegMxpr('expr'), RegMxpr('val'), RegMxpr('env')])),
+    AssignMstmt('unev', OpMxpr('get_var_name', [RegMxpr('expr')])),
+    PerformMstmt(OpMxpr('ec_env_define', [RegMxpr('env'), RegMxpr('unev'), RegMxpr('val')])),
+    AssignMstmt('val', OpMxpr('get_var_symbol', [RegMxpr('expr')])),
     GotoMstmt(RegMxpr('continue')),
 
   LabelMstmt('ev-define-proc'),
-    AssignMstmt('val', OpMxpr('pure_eval_define_proc_plain', [RegMxpr('expr'), RegMxpr('env')])),
+    AssignMstmt('val', OpMxpr('ec_define_proc_plain_val', [RegMxpr('expr'), RegMxpr('env')])),
+    AssignMstmt('unev', OpMxpr('get_var_name', [RegMxpr('expr')])),
+    PerformMstmt(OpMxpr('ec_env_define', [RegMxpr('env'), RegMxpr('unev'), RegMxpr('val')])),
+    AssignMstmt('val', OpMxpr('get_var_symbol', [RegMxpr('expr')])),
     GotoMstmt(RegMxpr('continue')),
 
   LabelMstmt('ev-and'),
@@ -390,12 +410,11 @@ Expression, List[Expression], Environment, SchemeVal, List[SchemeVal], Token
 we try to exclude pure integer and string
 '''
 
-def get_name_token(expr: Union[SymbolExpr, SetExpr]):
-    return expr.name
 
 def concat_token_message(token: Token, message: StringVal):
     rt_err = SchemeRuntimeError(token, message.value)
     return StringVal(str(rt_err))
+
 
 def ec_env_lookup(env: Environment, name: StringVal):
     '''return error and result'''
@@ -410,27 +429,33 @@ def ec_eval_expr_invalid(expr_type: StringVal):
     return StringVal(message)
 
 
-def ec_eval_call_invalid(expr: CallExpr, operator: SchemeVal):
+def ec_eval_call_invalid(paren: Token, operator: SchemeVal):
     try:
-        pure_eval_call_invalid(expr.paren, operator)
+        pure_eval_call_invalid(paren, operator)
     except SchemeRuntimeError as err:
         return StringVal(str(err))
 
 
-def ec_check_prim_arity(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
-    try:
-        pure_check_prim_arity(expr.paren, operator, operands)
-        return UndefVal()
-    except SchemeRuntimeError as err:
-        return StringVal(str(err))
+def _ec_check_arity(name: str, pos_arity: int, has_rest: bool, arg_count: int):
+    if has_rest:
+        if arg_count < pos_arity:
+            return '%s expect at least %d arguments, only get %d' % (name, pos_arity, arg_count)
+    else:
+        if arg_count != pos_arity:
+            return '%s expect exactly %d arguments, but get %d' % (name, pos_arity, arg_count)
+    return ''
 
 
-def ec_check_proc_arity(expr: CallExpr, operator: ProcVal, operands: List[SchemeVal]):
-    try:
-        pure_check_proc_arity(expr.paren, operator, operands)
-        return UndefVal()
-    except SchemeRuntimeError as err:
-        return StringVal(str(err))
+def ec_check_prim_arity(operator: PrimVal, operands: List[SchemeVal]):
+    message = _ec_check_arity(
+        operator.name, operator.pos_arity, operator.has_rest, len(operands))
+    return UndefVal() if message == '' else StringVal(message)
+
+
+def ec_check_proc_arity(operator: ProcVal, operands: List[SchemeVal]):
+    message = _ec_check_arity(operator.name, len(
+        operator.pos_paras), operator.rest_para is not None, len(operands))
+    return UndefVal() if message == '' else StringVal(message)
 
 
 def get_expr_type(expr: GenericExpr):
@@ -453,6 +478,10 @@ def get_expr_at(exprs: List[GenericExpr], index: NumberVal):
     return exprs[int(index.value)]
 
 
+def get_paren_token(expr: CallExpr):
+    return expr.paren
+
+
 def get_call_operator(expr: CallExpr):
     return expr.operator
 
@@ -463,6 +492,10 @@ def get_call_operands(expr: CallExpr):
 
 def get_proc_plain_val_body(proc: ProcPlainVal):
     return proc.body
+
+
+def ec_define_proc_plain_val(expr: DefineProcExpr, env: Environment):
+    return pure_eval_define_proc_plain_value(expr.name.literal, expr.pos_paras, expr.rest_para, expr.body, env)
 
 
 def init_val_list():
@@ -478,12 +511,11 @@ def get_val_type(expr: GenericVal):
     return StringVal(type(expr).__name__)
 
 
-def call_prim(expr: CallExpr, operator: PrimVal, operands: List[SchemeVal]):
+def call_prim(operator: PrimVal, operands: List[SchemeVal]):
     try:
         return PairVal(UndefVal(), operator.body(*operands))
     except SchemePrimError as err:
-        rt_err = SchemeRuntimeError(expr.paren, err.message)
-        return PairVal(StringVal(str(rt_err)), UndefVal())
+        return PairVal(StringVal(err.message), UndefVal())
 
 
 def get_if_predicate(expr: IfExpr):
@@ -502,8 +534,16 @@ def has_if_alternative(expr: IfExpr):
     return BooleanVal(expr.else_branch is not None)
 
 
-def get_var_name(expr: Union[SymbolExpr, SetExpr, DefineVarExpr]):
+def get_var_name(expr: Union[SymbolExpr, SetExpr, DefineVarExpr, DefineProcExpr]):
     return StringVal(expr.name.literal)
+
+
+def get_var_name_token(expr: Union[SymbolExpr, SetExpr, DefineVarExpr, DefineProcExpr]):
+    return expr.name
+
+
+def get_var_symbol(expr: Union[SymbolExpr, SetExpr, DefineVarExpr, DefineProcExpr]):
+    return SymbolVal(expr.name.literal)
 
 
 def get_var_init(expr: Union[SetExpr, DefineVarExpr]):
@@ -518,12 +558,34 @@ def ec_env_set(env: Environment, name: StringVal, initializer: SchemeVal):
         return PairVal(StringVal('symbol undefined'), UndefVal())
 
 
+def ec_env_define(env: Environment, name: StringVal, initializer: SchemeVal):
+    env_define(env, name.value, initializer)
+
+
 def goto_panic(message: StringVal):
     scheme_panic(message.value)
 
 
 def boolean_not(val: SchemeVal):
     return BooleanVal(False if is_truthy(val) else True)
+
+
+def get_proc_env(val: ProcPlainVal):
+    return val.env
+
+
+def get_call_parameters(operator: ProcVal):
+    parameters = pure_get_proc_parameters(operator)
+    return [StringVal(s) for s in parameters]
+
+
+def get_call_arguments(operator: ProcVal, operands: List[SchemeVal]):
+    arguments = pure_get_proc_arguments(operator, operands)
+    return arguments
+
+
+def ec_env_extend(env: Environment, parameters: List[StringVal], arguments: List[SchemeVal]):
+    return env_extend(env, [s.value for s in parameters], arguments)
 
 
 def install_ec_operations():
@@ -536,20 +598,22 @@ def install_ec_operations():
         'pure_eval_lambda_plain': pure_eval_lambda_plain,
         'pure_eval_call_proc_extend_env': pure_eval_call_proc_extend_env,
         'pure_eval_define_var': pure_eval_define_var,
-        'pure_eval_define_proc_plain': pure_eval_define_proc_plain,
         'goto_panic': goto_panic,
 
-        'get_name_token': get_name_token,
+        'get_var_name_token': get_var_name_token,
         'concat_token_message': concat_token_message,
-        'ec_env_lookup': ec_env_lookup,
         'get_expr_type': get_expr_type,
         'get_expr_contents': get_expr_contents,
         'get_expr_content': get_expr_content,
         'get_exprs_len': get_exprs_len,
         'get_expr_at': get_expr_at,
+        'get_paren_token': get_paren_token,
         'get_call_operator': get_call_operator,
         'get_call_operands': get_call_operands,
         'get_proc_plain_val_body': get_proc_plain_val_body,
+        'get_proc_env': get_proc_env,
+        'get_call_parameters': get_call_parameters,
+        'get_call_arguments': get_call_arguments,
         'init_val_list': init_val_list,
         'append_val_list': append_val_list,
         'get_val_type': get_val_type,
@@ -559,8 +623,13 @@ def install_ec_operations():
         'get_if_alternative': get_if_alternative,
         'has_if_alternative': has_if_alternative,
         'get_var_name': get_var_name,
+        'get_var_symbol': get_var_symbol,
         'get_var_init': get_var_init,
         'ec_env_set': ec_env_set,
+        'ec_env_define': ec_env_define,
+        'ec_env_lookup': ec_env_lookup,
+        'ec_env_extend': ec_env_extend,
+        'ec_define_proc_plain_val': ec_define_proc_plain_val,
         'ec_eval_expr_invalid': ec_eval_expr_invalid,
         'ec_eval_call_invalid': ec_eval_call_invalid,
         'ec_check_prim_arity': ec_check_prim_arity,
@@ -742,7 +811,7 @@ def test_recursion():
         (factorial %d)
         ''',
         name='factorial-recur',
-        nrng=(1,10),
+        nrng=(1, 10),
         get_val=factorial
     )
     # iteration
@@ -758,7 +827,7 @@ def test_recursion():
         (factorial %d)
         ''',
         name='factorial-iter',
-        nrng=(1,10),
+        nrng=(1, 10),
         get_val=factorial
     )
 
