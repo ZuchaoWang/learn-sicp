@@ -293,9 +293,8 @@ ec_eval_code = [
     RestoreMstmt('env'),
     RestoreMstmt('expr'),
     RestoreMstmt('continue'),
-    # directly assigning flag, not using test
-    # here we assume TestMstmt will call is_truthy, so flag does not have to be boolean
-    AssignMstmt('flag', RegMxpr('val')),
+    # although we can directly assign val to flag, we still follow the convention to use test
+    TestMstmt(OpMxpr('true?', [RegMxpr('val')])),
     BranchMstmt(LabelMxpr('ev-if-consequent')),
     TestMstmt(OpMxpr('has_if_alternative', [RegMxpr('expr')])),
     BranchMstmt(LabelMxpr('ev-if-alternative')),
@@ -382,7 +381,7 @@ ec_eval_code = [
     RestoreMstmt('unev2'),
     RestoreMstmt('unev'),
     AssignMstmt('unev3', OpMxpr('+', [RegMxpr('unev3'), ConstMxpr(NumberVal(1))])),
-    AssignMstmt('flag', RegMxpr('val')),
+    TestMstmt(OpMxpr('true?', [RegMxpr('val')])),
     BranchMstmt(LabelMxpr('ev-and-loop')),
     # no support for tail recursion, because we don't know where to early return (which is first falsy expr)
   LabelMstmt('ev-and-finish'),
@@ -411,7 +410,7 @@ ec_eval_code = [
     RestoreMstmt('unev2'),
     RestoreMstmt('unev'),
     AssignMstmt('unev3', OpMxpr('+', [RegMxpr('unev3'), ConstMxpr(NumberVal(1))])),
-    AssignMstmt('flag', RegMxpr('val')),
+    TestMstmt(OpMxpr('true?', [RegMxpr('val')])),
     # only difference with and: branch go to finish, rather than loop
     BranchMstmt(LabelMxpr('ev-or-finish')),
     GotoMstmt(LabelMxpr('ev-or-loop')),
@@ -609,6 +608,10 @@ def boolean_not(val: SchemeVal):
     return BooleanVal(False if is_truthy(val) else True)
 
 
+def boolean_true(val: SchemeVal):
+    return BooleanVal(is_truthy(val))
+
+
 def get_proc_env(val: ProcPlainVal):
     return val.env
 
@@ -674,6 +677,7 @@ def install_ec_operations():
         'ec_check_prim_arity': ec_check_prim_arity,
         'ec_check_proc_arity': ec_check_proc_arity,
         'boolean_not': boolean_not,
+        'true?': boolean_true
     }
     update_operations(ops)
 
