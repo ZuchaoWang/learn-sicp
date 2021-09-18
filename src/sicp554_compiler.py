@@ -219,10 +219,12 @@ def compile_sequence(expr: SequenceExpr, target: str, linkage: SchemeLinkage, co
     contents = expr.contents
     contents_count = len(contents)
     lkg_next = SchemeLinkage(LinkageTag.NEXT)
-    seq_list = [compile_const(UndefVal(), target, linkage)] + \
-        [compile_recursive(contents[i], target, (linkage if i ==
-                           contents_count-1 else lkg_next)) for i in range(contents_count)]
-    seq_front = preserve_instructions(set(['env']), *seq_list[:-1])
-    seq_all = preserve_instructions(
-        set(['env', 'continue']), seq_front, seq_list[-1])
-    return end_with_linkage(linkage, seq_all)
+    if contents_count == 0:
+        return compile_const(UndefVal(), target, linkage)
+    else:
+        seq_list = [compile_recursive(contents[i], target, lkg_next) for i in range(contents_count-1)] + \
+            [compile_recursive(contents[-1], target, linkage)]
+        seq_front = preserve_instructions(set(['env']), *seq_list[:-1])
+        seq_all = preserve_instructions(
+            set(['env', 'continue']), seq_front, seq_list[-1])
+        return end_with_linkage(linkage, seq_all)
