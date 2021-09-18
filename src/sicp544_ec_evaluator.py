@@ -26,6 +26,9 @@ for those operations that can fail, instead of purely returning result, we retur
 then we extract "error" via car, test/branch on it
 to print error message, we need token to get its position in source code
 we acquire the token from the expression itself using get_var_name_token and get_paren_token
+then we concatenate token and "error", put it in a special register err, and goto error-handler label
+notice we only use "err" register to store final concatenated error message as input to error-handler
+we don't store intermediate un-tokened message here, nor any other information
 
 in recursion test, factorial iteration use constant max stack depth (16)
 this shows our tail recursion support is correctly implemented
@@ -95,9 +98,9 @@ ec_eval_code = [
     BranchMstmt(LabelMxpr('ev-or')),
     TestMstmt(OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(StringVal('NotExpr'))])),
     BranchMstmt(LabelMxpr('ev-not')),
-    # put expression type in val, then goto error
-    AssignMstmt('val', OpMxpr('ec_eval_expr_invalid', [RegMxpr('unev')])),
-    GotoMstmt(LabelMxpr('error-unknown-expression-type')),
+    # put expression type in err, then goto error
+    AssignMstmt('err', OpMxpr('ec_eval_expr_invalid', [RegMxpr('unev')])),
+    GotoMstmt(LabelMxpr('error-handler')),
 
   LabelMstmt('ev-string'),
     AssignMstmt('val', OpMxpr('pure_eval_string', [RegMxpr('expr')])),
@@ -135,8 +138,8 @@ ec_eval_code = [
     BranchMstmt(LabelMxpr('ev-symbol-no-error')),
     # has error, first val = token, then val = concatenated_message
     AssignMstmt('val', OpMxpr('get_var_name_token', [RegMxpr('expr')])),
-    AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('val'), RegMxpr('unev')])),
-    GotoMstmt(LabelMxpr('error-symbol-undefined')),
+    AssignMstmt('err', OpMxpr('concat_token_message', [RegMxpr('val'), RegMxpr('unev')])),
+    GotoMstmt(LabelMxpr('error-handler')),
   LabelMstmt('ev-symbol-no-error'),
     # val = result
     AssignMstmt('val', OpMxpr('cdr', [RegMxpr('val')])),
@@ -242,16 +245,16 @@ ec_eval_code = [
   LabelMstmt('ev-call-invalid'),  
     AssignMstmt('unev', OpMxpr('get_paren_token', [RegMxpr('expr')])),
     AssignMstmt('val', OpMxpr('ec_eval_call_invalid', [RegMxpr('proc')])),
-    AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
-    GotoMstmt(LabelMxpr('error-unknown-operator-type')),
+    AssignMstmt('err', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
+    GotoMstmt(LabelMxpr('error-handler')),
 
   LabelMstmt('ev-call-proc-plain'),
     AssignMstmt('val', OpMxpr('ec_check_proc_arity', [RegMxpr('proc'), RegMxpr('argl')])),
     TestMstmt(OpMxpr('equal?', [RegMxpr('val'), ConstMxpr(UndefVal())])),
     BranchMstmt(LabelMxpr('ev-call-proc-plain-arity-ok')),
     AssignMstmt('unev', OpMxpr('get_paren_token', [RegMxpr('expr')])),
-    AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
-    GotoMstmt(LabelMxpr('error-call-arity')),
+    AssignMstmt('err', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
+    GotoMstmt(LabelMxpr('error-handler')),
   LabelMstmt('ev-call-proc-plain-arity-ok'),
     AssignMstmt('env', OpMxpr('get_proc_env', [RegMxpr('proc')])),
     AssignMstmt('unev', OpMxpr('get_call_parameters', [RegMxpr('proc')])),
@@ -265,16 +268,16 @@ ec_eval_code = [
     TestMstmt(OpMxpr('equal?', [RegMxpr('val'), ConstMxpr(UndefVal())])),
     BranchMstmt(LabelMxpr('ev-call-prim-arity-ok')),
     AssignMstmt('unev', OpMxpr('get_paren_token', [RegMxpr('expr')])),
-    AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
-    GotoMstmt(LabelMxpr('error-call-arity')),
+    AssignMstmt('err', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
+    GotoMstmt(LabelMxpr('error-handler')),
   LabelMstmt('ev-call-prim-arity-ok'),
     AssignMstmt('uenv', OpMxpr('call_prim', [RegMxpr('proc'), RegMxpr('argl')])),
     AssignMstmt('val', OpMxpr('car', [RegMxpr('uenv')])), 
     TestMstmt(OpMxpr('equal?', [RegMxpr('val'), ConstMxpr(UndefVal())])),
     BranchMstmt(LabelMxpr('ev-call-prim-call-ok')),
     AssignMstmt('unev', OpMxpr('get_paren_token', [RegMxpr('expr')])),
-    AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
-    GotoMstmt(LabelMxpr('error-call-prim')),
+    AssignMstmt('err', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
+    GotoMstmt(LabelMxpr('error-handler')),
   LabelMstmt('ev-call-prim-call-ok'),
     AssignMstmt('val', OpMxpr('cdr', [RegMxpr('uenv')])), 
     GotoMstmt(RegMxpr('continue')),
@@ -328,8 +331,8 @@ ec_eval_code = [
     TestMstmt(OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(UndefVal())])),
     BranchMstmt(LabelMxpr('ev-set-ok')),
     AssignMstmt('val', OpMxpr('get_var_name_token', [RegMxpr('expr')])),
-    AssignMstmt('val', OpMxpr('concat_token_message', [RegMxpr('val'), RegMxpr('unev')])),
-    GotoMstmt(LabelMxpr('error-symbol-undefined')),
+    AssignMstmt('err', OpMxpr('concat_token_message', [RegMxpr('val'), RegMxpr('unev')])),
+    GotoMstmt(LabelMxpr('error-handler')),
   LabelMstmt('ev-set-ok'),
     AssignMstmt('val', OpMxpr('cdr', [RegMxpr('val')])),
     GotoMstmt(RegMxpr('continue')),
@@ -427,13 +430,9 @@ ec_eval_code = [
     GotoMstmt(RegMxpr('continue')),
 
     # handling of all errors are the same
-  LabelMstmt('error-unknown-expression-type'),
-  LabelMstmt('error-unknown-operator-type'),
-  LabelMstmt('error-symbol-undefined'),
-  LabelMstmt('error-call-arity'),
-  LabelMstmt('error-call-prim'),
+  LabelMstmt('error-handler'),
     # just goto_panic, assuming the error message in val 
-    PerformMstmt(OpMxpr('goto_panic', [RegMxpr('val')])),
+    PerformMstmt(OpMxpr('goto_panic', [RegMxpr('err')])),
     # following goto not really necessary, since goto_panic will exit execution
     GotoMstmt(LabelMxpr('done')),
 
@@ -682,6 +681,7 @@ def install_ec_operations():
 '''
 we have two more tmp registers: unev2, unev3
 we also have dist register to hold resolution distances
+and err register hold err message
 '''
 ec_eval_regs = {
     'val': None,
@@ -690,7 +690,8 @@ ec_eval_regs = {
     'unev': None,
     'unev2': None,
     'unev3': None,
-    'dist': None
+    'dist': None,
+    'err': None
 }
 
 
