@@ -197,19 +197,31 @@ def install_stringify_mstmt_rules():
     update_stringify_mstmt_rules(rules)
 
 
-def trace(instructions: List[RegInst], state: RegMachineState, stringify_inst_data: StringifyInstDataFuncType):
-    def _trace_print(index: int, inst: RegInst):
-        for reg_name in state.regs:
-            if reg_name != 'pc' and state.regs[reg_name] is not None:
-                print('  %s = %s' %
-                      (reg_name, stringify_inst_data(state.regs[reg_name])))
-        print('@ pc = %d: %s' %
-              (index, stringify_mstmt(inst.code, stringify_inst_data)))
+def trace_stringify(index: int, inst: RegInst, state: RegMachineState, stringify_inst_data: StringifyInstDataFuncType):
+    outputs: List[str] = []
+    for reg_name in state.regs:
+        if reg_name != 'pc' and state.regs[reg_name] is not None:
+            outputs.append('  %s = %s' %
+                  (reg_name, stringify_inst_data(state.regs[reg_name])))
+    outputs.append('@ pc = %d: %s' %
+          (index, stringify_mstmt(inst.code, stringify_inst_data)))
+    return outputs
 
+
+class TraceState:
+    def __init__(self):
+        self.outputs: List[str] = []
+
+
+def reset_trace(ts: TraceState):
+    ts.outputs = []
+
+
+def trace_machine(instructions: List[RegInst], state: RegMachineState, stringify_inst_data: StringifyInstDataFuncType, ts: TraceState):
     def _trace_one(index: int, inst: RegInst):
         prev_exec = inst.exec
         def _exec():
-            _trace_print(index, inst)
+            ts.outputs.extend(trace_stringify(index, inst, state, stringify_inst_data))
             prev_exec()
         inst.exec = _exec
 
@@ -222,10 +234,12 @@ def test_trace():
     print('trace: %s' % case['name'])
     ops = get_operations()
     machine = make_machine(case['regs'], ops, case['code'])
-    trace(machine.instructions, machine.state, stringify_value)
+    tstate = TraceState()
+    trace_machine(machine.instructions, machine.state, stringify_value, tstate)
     init_machine_pc(machine)
     execute_machine = make_run_machine(lambda _: False)
     execute_machine(machine)
+    print('\n'.join(tstate.outputs))
     res = machine.state.regs['val']
     res_str = stringify_value(res)
     assert res_str == case['res_str_expected']

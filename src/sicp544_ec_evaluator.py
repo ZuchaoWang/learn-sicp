@@ -42,24 +42,24 @@ all operands need to form a list and put into argl; in sicp524_monitor they are 
 stack operations, error checking for arity and primitive also consumes lots of instructions
 '''
 
-from typing import Callable, List, Tuple, Union
-from sicp414_evaluator import AndExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, Environment, \
+from typing import Any, Callable, List, Tuple, Union
+from sicp414_evaluator import AndExpr, BooleanVal, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, \
     GenericExpr, GenericVal, IfExpr, NotExpr, NumberVal, OrExpr, PairVal, PrimVal, ProcPlainVal, ProcVal, \
     SchemeEnvError, SchemePanic, SchemePrimError, SchemeRuntimeError, SchemeVal, SequenceExpr, SetExpr, \
     StringVal, SymbolExpr, SymbolVal, Token, UndefVal, env_define, env_extend, install_is_equal_rules, \
     install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, \
     is_truthy, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_define_proc_plain_value, \
     pure_eval_lambda_plain, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, \
-    pure_get_proc_arguments, pure_get_proc_parameters, scan_source, scheme_flush, scheme_panic, stringify_value
+    pure_get_proc_arguments, pure_get_proc_parameters, scan_source, scheme_flush, scheme_panic, stringify_expr, stringify_token, stringify_value
 from sicp416_resolver import ResDistancesType, env_lookup_at, env_set_at, install_resolver_rules, resolve_expr
-from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, OpMxpr, \
-    PerformMstmt, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, \
+from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, InstMstmt, LabelMstmt, LabelMxpr, Mstmt, OpMxpr, \
+    PerformMstmt, RegInstPtr, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, \
     install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, \
     make_machine, make_run_machine, update_operations
-from sicp524_monitor import MachineStatistic, monitor_statistics
+from sicp524_monitor import MachineStatistic, TraceState, install_stringify_mstmt_rules, install_stringify_mxpr_rules, monitor_statistics, stringify_mstmt, trace_machine
 
 # fmt: off
-ec_eval_code = [
+ec_eval_code_list = [
   LabelMstmt('main'),
     AssignMstmt('continue', LabelMxpr('done')),
 
@@ -440,13 +440,36 @@ ec_eval_code = [
 
 # fmt: on
 
+
 '''
-additioanl operations
-we try to make their input/ouput only of following types
-Expression, List[Expression], Environment, SchemeVal, List[SchemeVal], Token
+we assume all data to be processed are of following types:
+Expression, List[Expression], Environment, SchemeVal, List[SchemeVal], Token, Dict[Union[SetExpr,SymbolExpr],int], RegInstPtr
 we try to exclude pure integer and string
+only these types will appear in instruction and operations input/output
 '''
 
+'''stringify instructions'''
+
+def stringify_inst_data(data: Any) -> str:
+    if isinstance(data, Token):
+        return '<token=%s>' % stringify_token(data)
+    elif isinstance(data, Environment):
+        return '<environment>'
+    elif isinstance(data, list):
+        return '[%s]' % (', '.join([stringify_inst_data(d) for d in data]))
+    elif isinstance(data, Expression):
+        return '<expression=%s>' % stringify_expr(data)
+    elif isinstance(data, SchemeVal):
+        return stringify_value(data)
+    elif isinstance(data, RegInstPtr):
+        return '<ptr=%d>' % data.index
+    else:
+        return '<invalid>'
+
+'''
+additional operations
+we try to make their input/ouput only of following types
+'''
 
 def concat_token_message(token: Token, message: StringVal):
     rt_err = SchemeRuntimeError(token, message.value)
@@ -704,42 +727,51 @@ def test_one(source: str, **kargs: str):
     print('* source: %s' % source)
 
     try:
-        # scan
-        tokens = scan_source(source)
+        try:
+            # scan
+            tokens = scan_source(source)
 
-        # parse
-        combos = parse_tokens(tokens)
-        expr = parse_expr(combos)
+            # parse
+            combos = parse_tokens(tokens)
+            expr = parse_expr(combos)
 
-        # resolve
-        distances = resolve_expr(expr)
+            # resolve
+            distances = resolve_expr(expr)
 
-        # build machine
-        ops = get_operations()
-        glbenv = make_global_env()
-        machine = make_machine(ec_eval_regs, ops, ec_eval_code)
-        machine.state.regs.update(
-            {'expr': expr, 'env': glbenv, 'dist': distances})
-        execute_machine = make_run_machine(lambda _: False)
+            # build machine
+            ops = get_operations()
+            glbenv = make_global_env()
+            machine = make_machine(ec_eval_regs, ops, ec_eval_code_list)
+            machine.state.regs.update(
+                {'expr': expr, 'env': glbenv, 'dist': distances})
+            execute_machine = make_run_machine(lambda _: False)
 
-        # result
-        init_machine_pc(machine)
-        execute_machine(machine)
-        result = machine.state.regs['val']
-        result_str = stringify_value(result)
-        output_str = scheme_flush()
-        if len(output_str):
-            print('* output: %s' % output_str)
-        if 'output' in kargs:
-            assert output_str == kargs['output']
-        print('* result: %s' % result_str)
-        if 'result' in kargs:
-            assert result_str == kargs['result']
+            # trace
+            tstate = TraceState()
+            trace_machine(machine.instructions, machine.state, stringify_inst_data, tstate)
 
-    except SchemePanic as err:
-        # any kind of panic
-        print('* panic: %s' % err.message)
-        assert err.message == kargs['panic']
+            # result
+            init_machine_pc(machine)
+            execute_machine(machine)
+            result = machine.state.regs['val']
+            result_str = stringify_value(result)
+            output_str = scheme_flush()
+            if len(output_str):
+                print('* output: %s' % output_str)
+            if 'output' in kargs:
+                assert output_str == kargs['output']
+            print('* result: %s' % result_str)
+            if 'result' in kargs:
+                assert result_str == kargs['result']
+
+        except SchemePanic as err:
+            # any kind of panic
+            print('* panic: %s' % err.message)
+            assert err.message == kargs['panic']
+    except Exception as err:
+        # print current instruction and regs
+        print('\n'.join(tstate.outputs[-100:]))
+        raise err
     print('----------')
 
 
@@ -765,7 +797,7 @@ def test_one_recursion(source_tmpl: str, name: str, nrng: Tuple[int, int], get_v
             # build machine
             ops = get_operations()
             glbenv = make_global_env()
-            machine = make_machine(ec_eval_regs, ops, ec_eval_code)
+            machine = make_machine(ec_eval_regs, ops, ec_eval_code_list)
             statistics = MachineStatistic()
             monitor_statistics(machine.instructions, machine.state, statistics)
             machine.state.regs.update(
@@ -955,8 +987,26 @@ def install_rules():
     install_primitives()
     install_assemble_mxpr_rules()
     install_assemble_mstmt_rules()
+    install_stringify_mxpr_rules()
+    install_stringify_mstmt_rules()
     install_operations()
     install_ec_operations()
+
+
+def print_code_list(code_list: List[Mstmt]):
+    index = 0
+    for code in code_list:
+        if isinstance(code, InstMstmt):
+            print('@ pc = %d: %s' % (index, stringify_mstmt(code, stringify_inst_data)))
+            index += 1
+        else:
+            print(stringify_mstmt(code, stringify_inst_data))
+
+
+def print_ec_eval_code():
+    print('ec_eval_code:')
+    print_code_list(ec_eval_code_list)
+    print('----------')
 
 
 def test():
@@ -968,4 +1018,5 @@ def test():
 
 if __name__ == '__main__':
     install_rules()
+    print_ec_eval_code()
     test()
