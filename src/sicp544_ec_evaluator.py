@@ -49,7 +49,7 @@ from sicp414_evaluator import AndExpr, BooleanVal, CallExpr, DefineProcExpr, Def
     StringVal, SymbolExpr, SymbolVal, Token, UndefVal, env_define, env_extend, install_is_equal_rules, \
     install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, \
     is_truthy, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_define_proc_plain_value, \
-    pure_eval_define_var, pure_eval_lambda_plain, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, \
+    pure_eval_lambda_plain, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, \
     pure_get_proc_arguments, pure_get_proc_parameters, scan_source, scheme_flush, scheme_panic, stringify_value
 from sicp416_resolver import ResDistancesType, env_lookup_at, env_set_at, install_resolver_rules, resolve_expr
 from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, OpMxpr, \
@@ -316,7 +316,7 @@ ec_eval_code = [
     AssignMstmt('expr', OpMxpr('get_var_init', [RegMxpr('expr')])),
     AssignMstmt('continue', LabelMxpr('ev-set-init-ret')),
     GotoMstmt(LabelMxpr('eval-dispatch')),
-    # now val = initializer
+    # now val = initializer, it still stay there until end
   LabelMstmt('ev-set-init-ret'),  
     RestoreMstmt('continue'),
     RestoreMstmt('env'),
@@ -325,15 +325,15 @@ ec_eval_code = [
     AssignMstmt('unev', OpMxpr('get_var_name', [RegMxpr('expr')])),
     # unev2 = distance
     AssignMstmt('unev2', OpMxpr('get_distance', [RegMxpr('dist'), RegMxpr('expr')])),
-    AssignMstmt('val', OpMxpr('ec_env_set_at', [RegMxpr('env'), RegMxpr('unev2'), RegMxpr('unev'), RegMxpr('val')])),
-    AssignMstmt('unev', OpMxpr('car', [RegMxpr('val')])),
+    # unev = error
+    AssignMstmt('unev', OpMxpr('ec_env_set_at', [RegMxpr('env'), RegMxpr('unev2'), RegMxpr('unev'), RegMxpr('val')])),
     TestMstmt(OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(UndefVal())])),
     BranchMstmt(LabelMxpr('ev-set-ok')),
-    AssignMstmt('val', OpMxpr('get_var_name_token', [RegMxpr('expr')])),
-    AssignMstmt('err', OpMxpr('concat_token_message', [RegMxpr('val'), RegMxpr('unev')])),
+    # unev2 = name
+    AssignMstmt('unev2', OpMxpr('get_var_name_token', [RegMxpr('expr')])),
+    AssignMstmt('err', OpMxpr('concat_token_message', [RegMxpr('unev2'), RegMxpr('unev')])),
     GotoMstmt(LabelMxpr('error-handler')),
   LabelMstmt('ev-set-ok'),
-    AssignMstmt('val', OpMxpr('cdr', [RegMxpr('val')])),
     GotoMstmt(RegMxpr('continue')),
 
   LabelMstmt('ev-define-var'),
@@ -591,9 +591,9 @@ def get_var_init(expr: Union[SetExpr, DefineVarExpr]):
 def ec_env_set_at(env: Environment, distance: NumberVal, name: StringVal, initializer: SchemeVal):
     try:
         env_set_at(env, int(distance.value), name.value, initializer)
-        return PairVal(UndefVal(), initializer)
+        return UndefVal()
     except SchemeEnvError:
-        return PairVal(StringVal('symbol undefined'), UndefVal())
+        return StringVal('symbol undefined')
 
 
 def ec_env_define(env: Environment, name: StringVal, initializer: SchemeVal):
@@ -638,7 +638,6 @@ def install_ec_operations():
         'pure_eval_nil': pure_eval_nil,
         'pure_eval_quote': pure_eval_quote,
         'pure_eval_lambda_plain': pure_eval_lambda_plain,
-        'pure_eval_define_var': pure_eval_define_var,
         'goto_panic': goto_panic,
 
         'get_var_name_token': get_var_name_token,
@@ -816,6 +815,17 @@ def test_error():
 
 
 def test_expr():
+    test_one(
+        '''
+        (define x 1)
+        2
+        "string"
+        ()
+        #f
+        x
+        ''',
+        result='1'
+    )
     test_one(
         '((lambda (x) (+ x 1)) 2)',
         result='3',
