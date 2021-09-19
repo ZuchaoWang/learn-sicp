@@ -56,7 +56,8 @@ from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, In
     PerformMstmt, RegInstPtr, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, \
     install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, \
     make_machine, make_run_machine, update_operations
-from sicp524_monitor import MachineStatistic, TraceState, install_stringify_mstmt_rules, install_stringify_mxpr_rules, monitor_statistics, stringify_mstmt, trace_machine
+from sicp524_monitor import MachineStatistic, TraceState, install_stringify_mstmt_rules, install_stringify_mxpr_rules, \
+    monitor_statistics, stringify_mstmt, trace_machine
 
 # fmt: off
 ec_eval_code_list = [
@@ -450,6 +451,7 @@ only these types will appear in instruction and operations input/output
 
 '''stringify instructions'''
 
+
 def stringify_inst_data(data: Any) -> str:
     if isinstance(data, Token):
         return '<token=%s>' % stringify_token(data)
@@ -466,10 +468,12 @@ def stringify_inst_data(data: Any) -> str:
     else:
         return '<invalid>'
 
+
 '''
 additional operations
 we try to make their input/ouput only of following types
 '''
+
 
 def concat_token_message(token: Token, message: StringVal):
     rt_err = SchemeRuntimeError(token, message.value)
@@ -748,7 +752,8 @@ def test_one(source: str, **kargs: str):
 
             # trace
             tstate = TraceState()
-            trace_machine(machine.instructions, machine.state, stringify_inst_data, tstate)
+            trace_machine(machine.instructions, machine.state,
+                          stringify_inst_data, tstate)
 
             # result
             init_machine_pc(machine)
@@ -997,7 +1002,8 @@ def print_code_list(code_list: List[Mstmt]):
     index = 0
     for code in code_list:
         if isinstance(code, InstMstmt):
-            print('@ pc = %d: %s' % (index, stringify_mstmt(code, stringify_inst_data)))
+            print('@ pc = %d: %s' %
+                  (index, stringify_mstmt(code, stringify_inst_data)))
             index += 1
         else:
             print(stringify_mstmt(code, stringify_inst_data))

@@ -3,8 +3,8 @@ from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, ca
 from sicp414_evaluator import BooleanExpr, DefineVarExpr, GenericExpr, NilExpr, NumberExpr, NumberVal, QuoteExpr, SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value
 from sicp416_resolver import ResDistancesType, install_resolver_rules, resolve_expr
 from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, OpMxpr, PerformMstmt, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, make_run_machine, update_operations
-from sicp544_ec_evaluator import concat_token_message, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, goto_panic
-from sicp524_monitor import MachineStatistic, monitor_statistics
+from sicp544_ec_evaluator import concat_token_message, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, goto_panic, print_code_list, stringify_inst_data
+from sicp524_monitor import MachineStatistic, TraceState, monitor_statistics, install_stringify_mstmt_rules, install_stringify_mxpr_rules, trace_machine
 
 
 class SchemeCompiledSeq:
@@ -77,6 +77,11 @@ def make_label(label: str):
     cur_label_id = next_label_id
     next_label_id += 1
     return '%s-%d' % (label, cur_label_id)
+
+
+def reset_label():
+    global next_label_id
+    next_label_id = 0
 
 
 @enum.unique
@@ -161,6 +166,7 @@ def update_compile_rules(rules: Dict[Type, CompileFuncType]):
 
 
 def compile_expr(expr: GenericExpr, distances: ResDistancesType):
+    reset_label()
     label_main = 'main'  # cannot use make_label, otherwise become main-0
     label_done = make_label('done')
     lkg_done = SchemeLinkage(LinkageTag.GOTO, label_done)
@@ -316,44 +322,56 @@ def test_one(source: str, **kargs: str):
     print('* source: %s' % source)
 
     try:
-        # scan
-        tokens = scan_source(source)
+        try:
+            # scan
+            tokens = scan_source(source)
 
-        # parse
-        combos = parse_tokens(tokens)
-        expr = parse_expr(combos)
+            # parse
+            combos = parse_tokens(tokens)
+            expr = parse_expr(combos)
 
-        # resolve
-        distances = resolve_expr(expr)
+            # resolve
+            distances = resolve_expr(expr)
 
-        # compile
-        code = compile_expr(expr, distances).code
+            # compile
+            code = compile_expr(expr, distances).code
+            print('compiled code:')
+            print_code_list(code)
 
-        # build machine
-        ops = get_operations()
-        glbenv = make_global_env()
-        machine = make_machine(compile_regs, ops, code)
-        machine.state.regs.update({'env': glbenv})
-        execute_machine = make_run_machine(lambda _: False)
+            # build machine
+            ops = get_operations()
+            glbenv = make_global_env()
+            machine = make_machine(compile_regs, ops, code)
+            machine.state.regs.update({'env': glbenv})
+            execute_machine = make_run_machine(lambda _: False)
 
-        # result
-        init_machine_pc(machine)
-        execute_machine(machine)
-        result = machine.state.regs['val']
-        result_str = stringify_value(result)
-        output_str = scheme_flush()
-        if len(output_str):
-            print('* output: %s' % output_str)
-        if 'output' in kargs:
-            assert output_str == kargs['output']
-        print('* result: %s' % result_str)
-        if 'result' in kargs:
-            assert result_str == kargs['result']
+            # trace
+            tstate = TraceState()
+            trace_machine(machine.instructions, machine.state,
+                          stringify_inst_data, tstate)
 
-    except SchemePanic as err:
-        # any kind of panic
-        print('* panic: %s' % err.message)
-        assert err.message == kargs['panic']
+            # result
+            init_machine_pc(machine)
+            execute_machine(machine)
+            result = machine.state.regs['val']
+            result_str = stringify_value(result)
+            output_str = scheme_flush()
+            if len(output_str):
+                print('* output: %s' % output_str)
+            if 'output' in kargs:
+                assert output_str == kargs['output']
+            print('* result: %s' % result_str)
+            if 'result' in kargs:
+                assert result_str == kargs['result']
+
+        except SchemePanic as err:
+            # any kind of panic
+            print('* panic: %s' % err.message)
+            assert err.message == kargs['panic']
+    except Exception as err:
+        # print current instruction and regs
+        print('\n'.join(tstate.outputs[-100:]))
+        raise err
     print('----------')
 
 
@@ -573,6 +591,8 @@ def install_rules():
     install_primitives()
     install_assemble_mxpr_rules()
     install_assemble_mstmt_rules()
+    install_stringify_mxpr_rules()
+    install_stringify_mstmt_rules()
     install_operations()
     install_ec_operations()
     # compile rules
