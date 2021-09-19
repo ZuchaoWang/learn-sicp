@@ -5,9 +5,9 @@ original exec is wrapped in a new function which add functionalities to original
 the strategy to support breakpoint is to provide should_break function
 '''
 
-from typing import Dict, List, Set, Tuple, cast
+from typing import Any, Callable, Dict, List, Set, Tuple, Type, TypeVar, cast
 from sicp414_evaluator import NumberVal, install_stringify_value_rules, stringify_value
-from sicp523_simulator import RegInst, RegInstPtr, RegMachine, RegMachineCase, RegMachineState, RestoreMstmt, SaveMstmt, ShouldBreakFuncType, \
+from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GenericMstmt, GenericMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, Mxpr, OpMxpr, PerformMstmt, RegInst, RegInstPtr, RegMachine, RegMachineCase, RegMachineState, RegMxpr, RestoreMstmt, SaveMstmt, ShouldBreakFuncType, TestMstmt, \
     get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, \
     case_factorial_iter, case_factorial_recur, case_fib_double_recur, make_run_machine, run_machine, step_machine
 
@@ -82,6 +82,154 @@ def test_statistics():
     test_one_statistics(case_factorial_iter, nrng=[1, 10])
     test_one_statistics(case_factorial_recur, nrng=[1, 10])
     test_one_statistics(case_fib_double_recur, nrng=[1, 10])
+
+
+'''
+trace instructions, can be used for debugging
+for each executed instruction, it outputs values in regs (except for pc and flag)
+then output the pc together with the instruction itself
+to do that we need to stringify instructions
+see exercise 5.16
+'''
+
+TID = TypeVar('TID')  # type of instruction data
+
+StringifyInstDataFuncType = Callable[[TID], str]
+
+StringifyMxprFuncType = Callable[[GenericMxpr, StringifyInstDataFuncType], str]
+
+_stringify_mxpr_rules: Dict[Type, StringifyMxprFuncType] = {}
+
+
+def update_stringify_mxpr_rules(rules: Dict[Type, StringifyMxprFuncType]):
+    _stringify_mxpr_rules.update(rules)
+
+
+def stringify_mxpr(expr: Mxpr, stringify_inst_data: StringifyInstDataFuncType):
+    f = _stringify_mxpr_rules[type(expr)]
+    return f(expr, stringify_inst_data)
+
+
+def stringify_mxpr_const(expr: ConstMxpr, stringify_inst_data: StringifyInstDataFuncType):
+    return '(const %s)' % stringify_inst_data(expr.value)
+
+
+def stringify_mxpr_reg(expr: RegMxpr, stringify_inst_data: StringifyInstDataFuncType):
+    return '(reg %s)' % expr.name
+
+
+def stringify_mxpr_label(expr: LabelMxpr, stringify_inst_data: StringifyInstDataFuncType):
+    return '(label %s)' % expr.name
+
+
+def stringify_mxpr_op(expr: OpMxpr, stringify_inst_data: StringifyInstDataFuncType):
+    return '(op %s %s)' % (expr.operator, ' '.join([stringify_mxpr(subexpr, stringify_inst_data) for subexpr in expr.operands]))
+
+
+def install_stringify_mxpr_rules():
+    rules = {
+        ConstMxpr: stringify_mxpr_const,
+        RegMxpr: stringify_mxpr_reg,
+        LabelMxpr: stringify_mxpr_label,
+        OpMxpr: stringify_mxpr_op
+    }
+    update_stringify_mxpr_rules(rules)
+
+
+StringifyMstmtFuncType = Callable[[
+    GenericMstmt, StringifyInstDataFuncType], str]
+
+_stringify_mstmt_rules: Dict[Type, StringifyMstmtFuncType] = {}
+
+
+def update_stringify_mstmt_rules(rules: Dict[Type, StringifyMstmtFuncType]):
+    _stringify_mstmt_rules.update(rules)
+
+
+def stringify_mstmt(stmt: Mstmt, stringify_inst_data: StringifyInstDataFuncType):
+    f = _stringify_mstmt_rules[type(stmt)]
+    return f(stmt, stringify_inst_data)
+
+
+def stringify_mstmt_assign(stmt: AssignMstmt, stringify_inst_data: StringifyInstDataFuncType):
+    return '(assign %s %s)' % (stmt.name, stringify_mxpr(stmt.value, stringify_inst_data))
+
+
+def stringify_mstmt_perform(stmt: PerformMstmt, stringify_inst_data: StringifyInstDataFuncType):
+    return '(perform %s)' % stringify_mxpr(stmt.value, stringify_inst_data)
+
+
+def stringify_mstmt_test(stmt: TestMstmt, stringify_inst_data: StringifyInstDataFuncType):
+    return '(test %s)' % stringify_mxpr(stmt.value, stringify_inst_data)
+
+
+def stringify_mstmt_branch(stmt: BranchMstmt, stringify_inst_data: StringifyInstDataFuncType):
+    return '(branch %s)' % stringify_mxpr(stmt.label, stringify_inst_data)
+
+
+def stringify_mstmt_goto(stmt: GotoMstmt, stringify_inst_data: StringifyInstDataFuncType):
+    return '(goto %s)' % stringify_mxpr(stmt.dest, stringify_inst_data)
+
+
+def stringify_mstmt_save(stmt: SaveMstmt, stringify_inst_data: StringifyInstDataFuncType):
+    return '(save %s)' % stmt.name
+
+
+def stringify_mstmt_restore(stmt: RestoreMstmt, stringify_inst_data: StringifyInstDataFuncType):
+    return '(restore %s)' % stmt.name
+
+
+def stringify_mstmt_label(stmt: LabelMstmt, stringify_inst_data: StringifyInstDataFuncType):
+    return '%s' % stmt.name
+
+
+def install_stringify_mstmt_rules():
+    rules = {
+        AssignMstmt: stringify_mstmt_assign,
+        PerformMstmt: stringify_mstmt_perform,
+        TestMstmt: stringify_mstmt_test,
+        BranchMstmt: stringify_mstmt_branch,
+        GotoMstmt: stringify_mstmt_goto,
+        SaveMstmt: stringify_mstmt_save,
+        RestoreMstmt: stringify_mstmt_restore,
+        LabelMstmt: stringify_mstmt_label,
+    }
+    update_stringify_mstmt_rules(rules)
+
+
+def trace(instructions: List[RegInst], state: RegMachineState, stringify_inst_data: StringifyInstDataFuncType):
+    def _trace_print(index: int, inst: RegInst):
+        for reg_name in state.regs:
+            if reg_name != 'pc' and state.regs[reg_name] is not None:
+                print('  %s = %s' %
+                      (reg_name, stringify_inst_data(state.regs[reg_name])))
+        print('@ pc = %d: %s' %
+              (index, stringify_mstmt(inst.code, stringify_inst_data)))
+
+    def _trace_one(index: int, inst: RegInst):
+        prev_exec = inst.exec
+        def _exec():
+            _trace_print(index, inst)
+            prev_exec()
+        inst.exec = _exec
+
+    for i, inst in enumerate(instructions):
+        _trace_one(i, inst)
+
+
+def test_trace():
+    case = case_factorial_iter
+    print('trace: %s' % case['name'])
+    ops = get_operations()
+    machine = make_machine(case['regs'], ops, case['code'])
+    trace(machine.instructions, machine.state, stringify_value)
+    init_machine_pc(machine)
+    execute_machine = make_run_machine(lambda _: False)
+    execute_machine(machine)
+    res = machine.state.regs['val']
+    res_str = stringify_value(res)
+    assert res_str == case['res_str_expected']
+    print('----------')
 
 
 '''
@@ -213,11 +361,14 @@ def install_rules():
     install_stringify_value_rules()
     install_assemble_mxpr_rules()
     install_assemble_mstmt_rules()
+    install_stringify_mxpr_rules()
+    install_stringify_mstmt_rules()
     install_operations()
 
 
 def test():
     test_statistics()
+    test_trace()
     test_breakpoints()
 
 

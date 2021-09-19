@@ -12,7 +12,7 @@ mutation may run into trouble when pc value comes from a label, and label is to 
 '''
 
 import inspect
-from typing import Any, Callable, Dict, List, Tuple, Type, TypeVar, TypedDict, Union, cast
+from typing import Any, Callable, Dict, List, Type, TypeVar, TypedDict, Union
 
 from sicp414_evaluator import NumberVal, install_stringify_value_rules, is_truthy, scheme_panic, stringify_value, \
     prim_op_add, prim_op_sub, prim_op_mul, prim_op_div, prim_op_eq, prim_op_gt, prim_op_lt, prim_equal, prim_length, \
@@ -24,6 +24,9 @@ from sicp414_evaluator import NumberVal, install_stringify_value_rules, is_truth
 class Mxpr:
     '''machine language expression'''
     pass
+
+
+GenericMxpr = TypeVar('GenericMxpr', bound=Mxpr)
 
 
 class ConstMxpr(Mxpr):
@@ -56,6 +59,9 @@ class OpMxpr(Mxpr):
 class Mstmt:
     '''machine language statement'''
     pass
+
+
+GenericMstmt = TypeVar('GenericMstmt', bound=Mstmt)
 
 
 class InstMstmt(Mstmt):
@@ -186,8 +192,6 @@ def assemble(code: List[Mstmt], state: GenericRegMachineState):
     except SchemeAssembleError as err:
         scheme_panic(err.message)
 
-
-GenericMxpr = TypeVar("GenericMxpr", bound=Mxpr)
 
 AssembleMxprFuncType = Callable[[
     GenericMxpr, Dict[str, RegInstPtr], GenericRegMachineState], Callable]
