@@ -1,8 +1,8 @@
 import enum
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, cast
-from sicp414_evaluator import BooleanExpr, DefineVarExpr, GenericExpr, NilExpr, NumberExpr, NumberVal, QuoteExpr, SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value
+from sicp414_evaluator import BooleanExpr, DefineProcExpr, DefineVarExpr, Environment, GenericExpr, NilExpr, NumberExpr, NumberVal, ProcVal, QuoteExpr, SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value
 from sicp416_resolver import ResDistancesType, install_resolver_rules, resolve_expr
-from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, OpMxpr, PerformMstmt, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, make_run_machine, update_operations
+from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, OpMxpr, PerformMstmt, RegInstPtr, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, make_run_machine, update_operations
 from sicp544_ec_evaluator import concat_token_message, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, goto_panic, print_code_list, stringify_inst_data
 from sicp524_monitor import MachineStatistic, TraceState, monitor_statistics, install_stringify_mstmt_rules, install_stringify_mxpr_rules, trace_machine
 
@@ -267,6 +267,31 @@ def compile_sequence(expr: SequenceExpr, target: CompileTarget, linkage: SchemeL
         seq_all = preserve_instructions(
             set(['env', 'continue']), seq_front, seq_list[-1])
         return end_with_linkage(linkage, seq_all)
+
+
+class ProcCompiledVal(ProcVal):
+    def __init__(self, name: str, pos_paras: List[str], rest_para: Optional[str], body: RegInstPtr, env: Environment):
+        super().__init__(name, pos_paras, rest_para, env)
+        self.body = body
+
+
+def make_proc_compiled(name: str, pos_paras: List[str], rest_para: Optional[str], label_body: str, env: Environment):
+    pass
+
+
+def compile_define_proc_compiled(expr: DefineProcExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+    name = StringVal(expr.name.literal)
+    symbol = SymbolVal(expr.name.literal)
+    # proc_obj = make_proc_compiled(name: str, pos_paras: List[str], rest_para: Optional[str], body: SequenceExpr, env: Environment)
+    init_seq = compile_recursive(
+        expr.initializer, 'val', SchemeLinkage(LinkageTag.NEXT))
+    env_seq = SchemeCompiledSeq([
+        PerformMstmt(OpMxpr('ec_env_define', [
+            RegMxpr('env'), ConstMxpr(name), RegMxpr('val')])),
+    ], set(['env', 'val']), set())
+    ret_seq = SchemeCompiledSeq(
+        [AssignMstmt(target, ConstMxpr(symbol))], set(), set([target]))
+    return end_with_linkage(linkage, append_instructions(init_seq, env_seq, ret_seq))
 
 
 def install_compile_rules():

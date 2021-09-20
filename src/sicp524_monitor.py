@@ -197,14 +197,19 @@ def install_stringify_mstmt_rules():
     update_stringify_mstmt_rules(rules)
 
 
-def trace_stringify(index: int, inst: RegInst, state: RegMachineState, stringify_inst_data: StringifyInstDataFuncType):
+def trace_stringify(state: RegMachineState, stringify_inst_data: StringifyInstDataFuncType):
     outputs: List[str] = []
     for reg_name in state.regs:
         if reg_name != 'pc' and state.regs[reg_name] is not None:
             outputs.append('  %s = %s' %
                   (reg_name, stringify_inst_data(state.regs[reg_name])))
-    outputs.append('@ pc = %d: %s' %
-          (index, stringify_mstmt(inst.code, stringify_inst_data)))
+    pc: RegInstPtr = state.regs['pc']
+    if pc.index < len(pc.insts):
+        inst = pc.insts[pc.index]
+        outputs.append('@ pc = %d (%d): %s' %
+              (pc.index, id(pc.insts), stringify_mstmt(inst.code, stringify_inst_data)))
+    else:
+        outputs.append('@ pc = %d (%d): <end>' % (pc.index, id(pc.insts)))
     return outputs
 
 
@@ -218,15 +223,15 @@ def reset_trace(ts: TraceState):
 
 
 def trace_machine(instructions: List[RegInst], state: RegMachineState, stringify_inst_data: StringifyInstDataFuncType, ts: TraceState):
-    def _trace_one(index: int, inst: RegInst):
+    def _trace_one(inst: RegInst):
         prev_exec = inst.exec
         def _exec():
-            ts.outputs.extend(trace_stringify(index, inst, state, stringify_inst_data))
+            ts.outputs.extend(trace_stringify(state, stringify_inst_data))
             prev_exec()
         inst.exec = _exec
 
-    for i, inst in enumerate(instructions):
-        _trace_one(i, inst)
+    for inst in instructions:
+        _trace_one(inst)
 
 
 def test_trace():
