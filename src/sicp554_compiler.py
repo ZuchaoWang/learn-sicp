@@ -84,6 +84,11 @@ def reset_label():
     next_label_id = 0
 
 
+def compile_label(label: str):
+    '''usually this label comes from make_label'''
+    return SchemeCompiledSeq([LabelMstmt(label)], set(), set())   
+
+
 @enum.unique
 class LinkageTag(enum.Enum):
     NEXT = enum.auto()
@@ -170,10 +175,10 @@ def compile_expr(expr: GenericExpr, distances: ResDistancesType):
     label_main = 'main'  # cannot use make_label, otherwise become main-0
     label_done = make_label('done')
     lkg_done = SchemeLinkage(LinkageTag.GOTO, label_done)
-    seq_main = SchemeCompiledSeq([LabelMstmt(label_main)], set(), set())
+    seq_main = compile_label(label_main)
     seq_expr_no_lib = compile_expr_no_lib(expr, 'val', lkg_done, distances)
     seq_err_lib = compile_error_lib(lkg_done)
-    seq_done = SchemeCompiledSeq([LabelMstmt(label_done)], set(), set())
+    seq_done = compile_label(label_done)
     return parallel_instructions(seq_main, seq_expr_no_lib, seq_err_lib, seq_done)
 
 
@@ -325,6 +330,11 @@ def make_proc_compiled(proc: ProcStaticVal, env: Environment):
     return ProcCompiledVal(proc.name, proc.pos_paras, proc.rest_para, proc.body, env)
 
 
+def get_proc_compiled_body(proc: ProcCompiledVal):
+    '''this is an operation, because call finds its proc at runtime'''
+    return proc.body
+
+
 def stringify_mxpr_proc(expr: ProcMxpr, stringify_inst_data: StringifyInstDataFuncType):
     pos_para_str = ' '.join(expr.pos_paras)
     full_para_str = '%s . %s' % (
@@ -392,6 +402,70 @@ def compile_call_branch(label_proc: str, label_prim: str, label_invalid: str):
     ], set(['proc']), set(['unev']))
 
 
+def compile_call_proc_arity(paren: Token, label_proc: str):
+    check_seq = SchemeCompiledSeq([
+        LabelMstmt(label_proc),
+        AssignMstmt('unev', OpMxpr('ec_check_proc_arity', [RegMxpr('proc'), RegMxpr('argl')])),
+    ], set(['proc', 'argl']), set(['unev']))    
+    error_seq = compile_error_call('unev', paren)
+    return append_instructions(check_seq, error_seq)
+
+
+def compile_call_proc_env():
+    return SchemeCompiledSeq([
+        AssignMstmt('env', OpMxpr('get_proc_env', [RegMxpr('proc')])),
+        AssignMstmt('unev', OpMxpr('get_call_parameters', [RegMxpr('proc')])),
+        AssignMstmt('unev2', OpMxpr('get_call_arguments', [RegMxpr('proc'), RegMxpr('argl')])),
+        AssignMstmt('env', OpMxpr('ec_env_extend', [RegMxpr('env'), RegMxpr('unev'), RegMxpr('unev2')])),
+    ], set(['proc', 'argl', 'env']), set(['unev', 'unev2', 'env']))
+
+
+def compile_call_proc_apply(target: CompileTarget, linkage: SchemeLinkage):
+    assert linkage.tag != LinkageTag.NEXT
+    # we don't know which proc is called, so potentially every reg can change
+    # including pc and flag, but no need to list them here
+    all_regs = set(['val', 'unev', 'unev2', 'unev3', 'proc', 'argl', 'continue', 'env'])
+    if target == 'val' and linkage.tag == LinkageTag.RETURN:
+        return SchemeCompiledSeq([
+            AssignMstmt('val', OpMxpr('get_proc_compiled_body', [RegMxpr('proc')])),
+            GotoMstmt(RegMxpr('val')),
+        ], set(['proc']), all_regs)
+    elif target == 'val' and linkage.tag == LinkageTag.GOTO:
+        return SchemeCompiledSeq([
+            AssignMstmt('continue', ConstMxpr(linkage.label)),
+            AssignMstmt('val', OpMxpr('get_proc_compiled_body', [RegMxpr('proc')])),
+            GotoMstmt(RegMxpr('val')),
+        ], set(['proc']), all_regs)
+    elif target != 'val' and linkage.tag == LinkageTag.GOTO:
+        '''only happens for call operator, and linkage should be a next, turned into goto'''
+        label_ret = make_label('call-proc-ret')
+        return SchemeCompiledSeq([
+            AssignMstmt('continue', ConstMxpr(label_ret)),
+            AssignMstmt('val', OpMxpr('get_proc_compiled_body', [RegMxpr('proc')])),
+            GotoMstmt(RegMxpr('val')),
+            LabelMstmt(label_ret),
+            AssignMstmt(target, RegMxpr('val')),
+            GotoMstmt(LabelMxpr(cast(str, linkage.label)))
+        ], set(['proc', 'continue']), all_regs)
+    else:
+        assert False
+
+
+def compile_call_proc(paren: Token, label_proc: str, target: CompileTarget, linkage: SchemeLinkage):
+    arity_seq = compile_call_proc_arity(paren, label_proc)
+    env_seq = compile_call_proc_env()
+    apply_seq = compile_call_proc_apply(target, linkage)
+    return append_instructions(arity_seq, env_seq, apply_seq)
+
+
+def compile_call_prim():
+    pass
+
+
+def compile_call_invalid():
+    pass
+
+
 def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     operator_seq = compile_recursive(expr.operator, 'proc', SchemeLinkage(LinkageTag.NEXT))
     operands_seq = compile_call_operands(expr.operands, compile_recursive)
@@ -401,36 +475,13 @@ def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage, 
     label_invalid = make_label('call-invalid')
     branch_seq = compile_call_branch(label_proc, label_prim, label_invalid)
 
-    token = expr.paren
+    label_end = make_label('call-end')
+    branch_linkage = SchemeLinkage(LinkageTag.GOTO, label_end) if linkage.tag == LinkageTag.NEXT else linkage
+    proc_seq = compile_call_proc(expr.paren, label_proc, target, branch_linkage)
+    prim_seq = compile_call_prim()
+    invalid_seq = compile_call_invalid()
 
-    call_proc_preapre_seq = SchemeCompiledSeq([
-        LabelMstmt(label_proc),
-        AssignMstmt('unev', OpMxpr('ec_check_proc_arity', [RegMxpr('proc'), RegMxpr('argl')])),
-    ], set(['proc', 'argl']), set(['unev']))    
-    call_proc_error_seq = compile_error_call('unev', token)
-    call_proc_apply_seq = SchemeCompiledSeq([
-        AssignMstmt('env', OpMxpr('get_proc_env', [RegMxpr('proc')])),
-        AssignMstmt('unev', OpMxpr('get_call_parameters', [RegMxpr('proc')])),
-        AssignMstmt('unev2', OpMxpr('get_call_arguments', [RegMxpr('proc'), RegMxpr('argl')])),
-        AssignMstmt('env', OpMxpr('ec_env_extend', [RegMxpr('env'), RegMxpr('unev'), RegMxpr('unev2')])),
-    ], set(['proc', 'argl']), set(['unev']))   
-
-    call_proc_preapre_seq = SchemeCompiledSeq([
-        LabelMstmt(label_proc),
-        AssignMstmt('unev', OpMxpr('ec_check_proc_arity', [RegMxpr('proc'), RegMxpr('argl')])),
-        TestMstmt(OpMxpr('equal?', [RegMxpr('val'), ConstMxpr(UndefVal())])),
-        BranchMstmt(LabelMxpr('ev-call-proc-plain-arity-ok')),
-        AssignMstmt('unev', OpMxpr('get_paren_token', [RegMxpr('expr')])),
-        AssignMstmt('err', OpMxpr('concat_token_message', [RegMxpr('unev'), RegMxpr('val')])),
-        GotoMstmt(LabelMxpr('error-handler')),
-      LabelMstmt('ev-call-proc-plain-arity-ok'),
-        AssignMstmt('env', OpMxpr('get_proc_env', [RegMxpr('proc')])),
-        AssignMstmt('unev', OpMxpr('get_call_parameters', [RegMxpr('proc')])),
-        AssignMstmt('unev2', OpMxpr('get_call_arguments', [RegMxpr('proc'), RegMxpr('argl')])),
-        AssignMstmt('env', OpMxpr('ec_env_extend', [RegMxpr('env'), RegMxpr('unev'), RegMxpr('unev2')])),
-        AssignMstmt('expr', OpMxpr('get_proc_plain_val_body', [RegMxpr('proc')])),
-        GotoMstmt(LabelMxpr('ev-sequence')),
-    ], set(), set())
+    end_seq = compile_label(label_end)   
 
 
 def install_compile_rules():
@@ -466,7 +517,8 @@ def install_operations_compile():
         'init_val_list': init_val_list,
         'append_val_list': append_val_list,
 
-        'make_proc_compiled': make_proc_compiled
+        'make_proc_compiled': make_proc_compiled,
+        'get_proc_compiled_body': get_proc_compiled_body,
     }
     update_operations(ops)
 

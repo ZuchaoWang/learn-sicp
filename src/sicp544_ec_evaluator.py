@@ -721,7 +721,10 @@ ec_eval_regs = {
     'unev2': None,
     'unev3': None,
     'dist': None,
-    'err': None
+    'err': None,
+    'proc': None,
+    'argl': None,
+    'continue': None
 }
 
 
