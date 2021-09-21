@@ -206,10 +206,10 @@ def trace_stringify(state: RegMachineState, stringify_inst_data: StringifyInstDa
     pc: RegInstPtr = state.regs['pc']
     if pc.index < len(pc.insts):
         inst = pc.insts[pc.index]
-        outputs.append('@ pc = %d (%d): %s' %
+        outputs.append('@ pc = %d # %d: %s' %
               (pc.index, id(pc.insts), stringify_mstmt(inst.code, stringify_inst_data)))
     else:
-        outputs.append('@ pc = %d (%d): <end>' % (pc.index, id(pc.insts)))
+        outputs.append('@ pc = %d # %d: <end>' % (pc.index, id(pc.insts)))
     return outputs
 
 

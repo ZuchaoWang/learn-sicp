@@ -1,10 +1,10 @@
 import enum
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, cast
-from sicp414_evaluator import BooleanExpr, DefineProcExpr, DefineVarExpr, Environment, GenericExpr, NilExpr, NumberExpr, NumberVal, ProcVal, QuoteExpr, SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value
+from sicp414_evaluator import BooleanExpr, DefineProcExpr, DefineVarExpr, Environment, GenericExpr, NilExpr, NumberExpr, NumberVal, ProcVal, QuoteExpr, SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value, update_stringify_value_rules
 from sicp416_resolver import ResDistancesType, install_resolver_rules, resolve_expr
-from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, OpMxpr, PerformMstmt, RegInstPtr, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, make_run_machine, update_operations
+from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, Mxpr, OpMxpr, PerformMstmt, RegInstPtr, RegMachineState, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, make_run_machine, update_assemble_mxpr_rules, update_operations
 from sicp544_ec_evaluator import concat_token_message, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, goto_panic, print_code_list, stringify_inst_data
-from sicp524_monitor import MachineStatistic, TraceState, monitor_statistics, install_stringify_mstmt_rules, install_stringify_mxpr_rules, trace_machine
+from sicp524_monitor import MachineStatistic, StringifyInstDataFuncType, TraceState, monitor_statistics, install_stringify_mstmt_rules, install_stringify_mxpr_rules, trace_machine, update_stringify_mxpr_rules
 
 
 class SchemeCompiledSeq:
@@ -191,11 +191,11 @@ def compile_expr_no_lib(expr: GenericExpr, target: CompileTarget, linkage: Schem
 
 def compile_symbol(expr: SymbolExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     dist = NumberVal(distances[expr])
-    name = StringVal(expr.name.literal)
+    name_val = StringVal(expr.name.literal)
     token = expr.name
     env_seq = SchemeCompiledSeq([
         AssignMstmt('val', OpMxpr('ec_env_lookup_at', [
-                    RegMxpr('env'), ConstMxpr(dist), ConstMxpr(name)])),
+                    RegMxpr('env'), ConstMxpr(dist), ConstMxpr(name_val)])),
         AssignMstmt('unev', OpMxpr('car', [RegMxpr('val')])),
     ], set(['env']), set(['val', 'unev']))
     error_seq = compile_error_call('unev', token)
@@ -207,26 +207,26 @@ def compile_symbol(expr: SymbolExpr, target: CompileTarget, linkage: SchemeLinka
 
 def compile_set(expr: SetExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     dist = NumberVal(distances[expr])
-    name = StringVal(expr.name.literal)
+    name_val = StringVal(expr.name.literal)
     token = expr.name
     init_seq = compile_recursive(
         expr.initializer, target, SchemeLinkage(LinkageTag.NEXT))
     env_seq = SchemeCompiledSeq([
         AssignMstmt('unev', OpMxpr('ec_env_set_at', [
-                    RegMxpr('env'), ConstMxpr(dist), ConstMxpr(name), RegMxpr(target)])),
+                    RegMxpr('env'), ConstMxpr(dist), ConstMxpr(name_val), RegMxpr(target)])),
     ], set(['env', target]), set(['unev']))
     error_seq = compile_error_call('unev', token)
     return end_with_linkage(linkage, append_instructions(init_seq, env_seq, error_seq))
 
 
 def compile_define_var(expr: DefineVarExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
-    name = StringVal(expr.name.literal)
+    name_val = StringVal(expr.name.literal)
     symbol = SymbolVal(expr.name.literal)
     init_seq = compile_recursive(
         expr.initializer, 'val', SchemeLinkage(LinkageTag.NEXT))
     env_seq = SchemeCompiledSeq([
         PerformMstmt(OpMxpr('ec_env_define', [
-            RegMxpr('env'), ConstMxpr(name), RegMxpr('val')])),
+            RegMxpr('env'), ConstMxpr(name_val), RegMxpr('val')])),
     ], set(['env', 'val']), set())
     ret_seq = SchemeCompiledSeq(
         [AssignMstmt(target, ConstMxpr(symbol))], set(), set([target]))
@@ -269,29 +269,83 @@ def compile_sequence(expr: SequenceExpr, target: CompileTarget, linkage: SchemeL
         return end_with_linkage(linkage, seq_all)
 
 
+class ProcMxpr(Mxpr):
+    '''
+    this is the proc mxpr, whose body is a label str, not a RegInstPtr
+    '''
+    def __init__(self, name: str, pos_paras: List[str], rest_para: Optional[str], body: str):
+        self.name = name
+        self.pos_paras = pos_paras
+        self.rest_para = rest_para
+        self.body = body
+
+
+class ProcStaticVal(SchemeVal):
+    '''
+    this is the static representation of proc value
+    it's assembled from ProcMxpr, turning its body from a label str into a RegInstPtr
+    it doesn't have env, because env is only available at runtime, requiring an op
+    '''
+    def __init__(self, name: str, pos_paras: List[str], rest_para: Optional[str], body: RegInstPtr):
+        self.name = name
+        self.pos_paras = pos_paras
+        self.rest_para = rest_para
+        self.body = body
+
+
 class ProcCompiledVal(ProcVal):
+    '''
+    this is the runtime representation of proc value
+    it gains env from op
+    '''
     def __init__(self, name: str, pos_paras: List[str], rest_para: Optional[str], body: RegInstPtr, env: Environment):
         super().__init__(name, pos_paras, rest_para, env)
         self.body = body
 
 
-def make_proc_compiled(name: str, pos_paras: List[str], rest_para: Optional[str], label_body: str, env: Environment):
-    pass
+def assemble_mxpr_proc(mxpr: ProcMxpr, symbol_table: Dict[str, RegInstPtr], state: RegMachineState):
+    '''label value is ready at assemble time'''
+    name = mxpr.name
+    pos_paras = mxpr.pos_paras
+    rest_para = mxpr.rest_para
+    body_entry = symbol_table[mxpr.body]
+    return lambda: ProcStaticVal(name, pos_paras, rest_para, body_entry)
+
+
+def make_proc_compiled(proc: ProcStaticVal, env: Environment):
+    '''this is an operation, it combines static proc and runtime env'''
+    return ProcCompiledVal(proc.name, proc.pos_paras, proc.rest_para, proc.body, env)
+
+
+def stringify_mxpr_proc(expr: ProcMxpr, stringify_inst_data: StringifyInstDataFuncType):
+    pos_para_str = ' '.join(expr.pos_paras)
+    full_para_str = '%s . %s' % (pos_para_str, expr.rest_para) if expr.rest_para is not None else pos_para_str
+    return '(proc %s (%s) %s)' % (expr.name, full_para_str, expr.body)
+
+
+def stringify_value_procedure_static(sv: ProcStaticVal):
+    return '[procedure-static %s]' % sv.name
 
 
 def compile_define_proc_compiled(expr: DefineProcExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
-    name = StringVal(expr.name.literal)
-    symbol = SymbolVal(expr.name.literal)
-    # proc_obj = make_proc_compiled(name: str, pos_paras: List[str], rest_para: Optional[str], body: SequenceExpr, env: Environment)
-    init_seq = compile_recursive(
-        expr.initializer, 'val', SchemeLinkage(LinkageTag.NEXT))
+    name: str = expr.name.literal
+    name_val = StringVal(name)
+    symbol = SymbolVal(name)
+    pos_paras = [s.literal for s in expr.pos_paras]
+    rest_para = expr.rest_para.literal if expr.rest_para is not None else None
+    body_label = make_label('proc-body')
+
+    proc_seq = SchemeCompiledSeq([
+        AssignMstmt('val', ProcMxpr(name, pos_paras, rest_para, body_label)),
+        AssignMstmt('val', OpMxpr('make_proc_compiled', [RegMxpr('val'), RegMxpr('env')])),
+    ], set(['env']), set(['val']))
     env_seq = SchemeCompiledSeq([
         PerformMstmt(OpMxpr('ec_env_define', [
-            RegMxpr('env'), ConstMxpr(name), RegMxpr('val')])),
+            RegMxpr('env'), ConstMxpr(name_val), RegMxpr('val')])),
     ], set(['env', 'val']), set())
     ret_seq = SchemeCompiledSeq(
         [AssignMstmt(target, ConstMxpr(symbol))], set(), set([target]))
-    return end_with_linkage(linkage, append_instructions(init_seq, env_seq, ret_seq))
+    return end_with_linkage(linkage, append_instructions(proc_seq, env_seq, ret_seq))
 
 
 def install_compile_rules():
@@ -304,12 +358,13 @@ def install_compile_rules():
         QuoteExpr: compile_quote,
         SetExpr: compile_set,
         DefineVarExpr: compile_define_var,
+        DefineProcExpr: compile_define_proc_compiled,
         SequenceExpr: compile_sequence
     }
     update_compile_rules(rules)
 
 
-def install_ec_operations():
+def install_operations_compile():
     ops = {
         'pure_eval_string': pure_eval_string,
         'pure_eval_number': pure_eval_number,
@@ -323,8 +378,22 @@ def install_ec_operations():
         'ec_env_set_at': ec_env_set_at,
         'ec_env_define': ec_env_define,
         'ec_env_extend': ec_env_extend,
+
+        'make_proc_compiled': make_proc_compiled
     }
     update_operations(ops)
+
+def install_assemble_mxpr_compile_rules():
+    rules = {ProcMxpr: assemble_mxpr_proc}
+    update_assemble_mxpr_rules(rules)
+
+def install_stringify_mxpr_compile_rules():
+    rules = {ProcMxpr: stringify_mxpr_proc}
+    update_stringify_mxpr_rules(rules)
+
+def install_stringify_value_compile_rules():
+    rules = {ProcStaticVal: stringify_value_procedure_static}
+    update_stringify_value_rules(rules)
 
 
 '''
@@ -619,8 +688,11 @@ def install_rules():
     install_stringify_mxpr_rules()
     install_stringify_mstmt_rules()
     install_operations()
-    install_ec_operations()
     # compile rules
+    install_assemble_mxpr_compile_rules()
+    install_stringify_mxpr_compile_rules()
+    install_stringify_value_compile_rules
+    install_operations_compile()
     install_compile_rules()
 
 

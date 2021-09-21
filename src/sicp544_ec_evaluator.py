@@ -657,7 +657,7 @@ def ec_env_extend(env: Environment, parameters: List[StringVal], arguments: List
     return env_extend(env, [s.value for s in parameters], arguments)
 
 
-def install_ec_operations():
+def install_operations_ec():
     ops = {
         'pure_eval_string': pure_eval_string,
         'pure_eval_number': pure_eval_number,
@@ -995,7 +995,7 @@ def install_rules():
     install_stringify_mxpr_rules()
     install_stringify_mstmt_rules()
     install_operations()
-    install_ec_operations()
+    install_operations_ec()
 
 
 def print_code_list(code_list: List[Mstmt]):
