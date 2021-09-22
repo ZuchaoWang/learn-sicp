@@ -123,7 +123,10 @@ def stringify_mxpr_label(expr: LabelMxpr, stringify_inst_data: StringifyInstData
 
 
 def stringify_mxpr_op(expr: OpMxpr, stringify_inst_data: StringifyInstDataFuncType):
-    return '(op %s %s)' % (expr.operator, ' '.join([stringify_mxpr(subexpr, stringify_inst_data) for subexpr in expr.operands]))
+    if len(expr.operands):
+        return '(op %s %s)' % (expr.operator, ' '.join([stringify_mxpr(subexpr, stringify_inst_data) for subexpr in expr.operands]))
+    else:
+        return '(op %s)' % expr.operator
 
 
 def install_stringify_mxpr_rules():

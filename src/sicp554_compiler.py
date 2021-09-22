@@ -265,7 +265,10 @@ def compile_quote(expr: QuoteExpr, target: CompileTarget, linkage: SchemeLinkage
 
 
 def compile_sequence(expr: SequenceExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
-    '''all contents use the same target, all use next linkage except the last use input linkage'''
+    '''
+    all contents use the same target, all use next linkage except the last use input linkage
+    the last content already fire the linkage, so no need to call end_with_linkage; otherwise may return twice
+    '''
     contents = expr.contents
     contents_count = len(contents)
     lkg_next = SchemeLinkage(LinkageTag.NEXT)
