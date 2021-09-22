@@ -1,3 +1,35 @@
+'''
+running compiled code is much faster then pure ec-evalutor, requiring only 1/5 of instructions
+it avoids operations to get get_if_then, get_var_name, get_paren_token, get_distance, ...
+it also avoids going through the eval-dispatch conditional chain, and evaluating simple number/string/boolean/nil
+although it has so much saving, it's still nothing compared to hand-crafted machine, requiring 20x instructions
+
+the trickiest part of writing this compiler involves concatenating instruction sequences
+while intelligently generating save/restore pairs using preserve_instructions
+notice preserve instructions should not wrap conditionals with different gotos, such as in case of IfExpr
+otherwise restore may be skipped, resulting in unpaired save/restore
+
+also not all expressions need to add its own linkage code
+for example, sequence can rely on its last subexpression to handle the linkage
+if it additionally use end_with_linkage, then we might return twice
+
+call is the most complex part of compilation
+it has several steps: proc, argl, brannch, apply
+proc and apply needs initial env
+apply further needs initial continue, and newly generated proc and argl
+to achieve this we ensure reg to be used are up-to-date in evey step after it's generated before it's to be used
+for example, although proc is only to be used in apply, we also ask argl and branch to keep it intact
+this might not be the most efficient code, but easier to make it right
+
+to support compiled procedure, we add a new value: ProcCompiledVal
+but it needs env which is only available at runtime, and body entry pointer which is only available at assemble time
+so we have a ProcMxpr which have no env, and use label string to represent boby entry pointer
+assembling ProcMxpr makes ProcStaticVal, turning body entry pointer from string to RegInstPtr
+finally make_proc_compiled is a runtime operation, which combines ProcStaticVal and env to make ProcCompiledVal
+we cannot easily merge them into one step, e.g. adding ProcStaticVal.name/pos_paras/rest_para/body as make_proc_compiled's input
+in that case not only do we have to support strange const data type in ops, but also can't assemble body string to RegInstPtr
+'''
+
 import enum
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, cast
 from sicp414_evaluator import AndExpr, BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, \
@@ -372,7 +404,7 @@ def stringify_mxpr_proc(expr: ProcMxpr, stringify_inst_data: StringifyInstDataFu
 
 
 def stringify_value_procedure_static(sv: ProcStaticVal):
-    return '[procedure-static %s]' % sv.name
+    return '<procedure-static %s>' % sv.name
 
 
 def compile_define_proc_parameters(name_str: str, pos_paras: List[Token], rest_para: Optional[Token],
@@ -468,9 +500,11 @@ def compile_call_proc_env():
 
 def compile_call_proc_apply(target: CompileTarget, linkage: SchemeLinkage):
     assert linkage.tag != LinkageTag.NEXT
-    # we don't know which proc is called, so potentially every reg can change
-    # including pc and flag, but no need to list them here
-    # this relates to tail recursion, so we use special processing, instead of end_with_linkage
+    '''
+    we don't know which proc is called, so potentially every reg can change
+    including pc and flag, but no need to list them here
+    this relates to tail recursion, so we use special processing, instead of end_with_linkage
+    '''
     all_regs = set(['val', 'unev', 'unev2', 'unev3',
                     'proc', 'argl', 'continue', 'env'])
     if target == 'val' and linkage.tag == LinkageTag.RETURN:
