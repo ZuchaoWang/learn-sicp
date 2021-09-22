@@ -3,7 +3,7 @@ from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, ca
 from sicp414_evaluator import BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, GenericExpr, NilExpr, NumberExpr, NumberVal, ProcVal, QuoteExpr, SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value, update_stringify_value_rules
 from sicp416_resolver import ResDistancesType, install_resolver_rules, resolve_expr
 from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, Mxpr, OpMxpr, PerformMstmt, RegInstPtr, RegMachineState, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, make_run_machine, update_assemble_mxpr_rules, update_operations
-from sicp544_ec_evaluator import append_val_list, concat_token_message, ec_check_prim_arity, ec_check_proc_arity, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, ec_eval_call_invalid, get_call_arguments, get_call_parameters, goto_panic, init_val_list, print_code_list, stringify_inst_data
+from sicp544_ec_evaluator import append_val_list, call_prim, concat_token_message, ec_check_prim_arity, ec_check_proc_arity, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, ec_eval_call_invalid, get_call_arguments, get_call_parameters, get_proc_env, get_val_type, goto_panic, init_val_list, print_code_list, stringify_inst_data
 from sicp524_monitor import MachineStatistic, StringifyInstDataFuncType, TraceState, monitor_statistics, install_stringify_mstmt_rules, install_stringify_mxpr_rules, trace_machine, update_stringify_mxpr_rules
 
 
@@ -229,7 +229,7 @@ def compile_define_any(name: Token, source: str, target: CompileTarget):
     assert source != 'env'
     env_seq = SchemeCompiledSeq([
         PerformMstmt(OpMxpr('ec_env_define', [
-            RegMxpr('env'), ConstMxpr(name.literal), RegMxpr(source)])),
+            RegMxpr('env'), ConstMxpr(StringVal(name.literal)), RegMxpr(source)])),
     ], set(['env', source]), set())
     symbol = SymbolVal(name.literal)
     ret_seq = SchemeCompiledSeq(
@@ -275,9 +275,8 @@ def compile_sequence(expr: SequenceExpr, target: CompileTarget, linkage: SchemeL
         seq_list = [compile_recursive(contents[i], target, lkg_next) for i in range(contents_count-1)] + \
             [compile_recursive(contents[-1], target, linkage)]
         seq_front = preserve_instructions(set(['env']), *seq_list[:-1])
-        seq_all = preserve_instructions(
+        return preserve_instructions(
             set(['env', 'continue']), seq_front, seq_list[-1])
-        return end_with_linkage(linkage, seq_all)
 
 
 class ProcMxpr(Mxpr):
@@ -347,7 +346,7 @@ def stringify_value_procedure_static(sv: ProcStaticVal):
     return '[procedure-static %s]' % sv.name
 
 
-def compile_define_proc_parameters(expr: DefineProcExpr, target: CompileTarget, body_label: str):
+def compile_define_proc_parameters(expr: DefineProcExpr, target: CompileTarget, body_label: str, end_label: str):
     name: str = expr.name.literal
     pos_paras = [s.literal for s in expr.pos_paras]
     rest_para = expr.rest_para.literal if expr.rest_para is not None else None
@@ -355,6 +354,7 @@ def compile_define_proc_parameters(expr: DefineProcExpr, target: CompileTarget, 
         AssignMstmt(target, ProcMxpr(name, pos_paras, rest_para, body_label)),
         AssignMstmt(target, OpMxpr('make_proc_compiled',
                                    [RegMxpr(target), RegMxpr('env')])),
+        GotoMstmt(LabelMxpr(end_label)) # jump over body instructions
     ], set(['env']), set([target]))
 
 
@@ -369,9 +369,11 @@ def compile_define_proc_body(expr: DefineProcExpr, body_label: str, compile_recu
 
 def compile_define_proc_value(expr: DefineProcExpr, target: CompileTarget, compile_recursive: CompileRecurFuncType):
     body_label = make_label('proc-body')
-    para_seq = compile_define_proc_parameters(expr, target, body_label)
+    end_label = make_label('proc-end')
+    para_seq = compile_define_proc_parameters(expr, target, body_label, end_label)
     body_seq = compile_define_proc_body(expr, body_label, compile_recursive)
-    return tack_instructions(para_seq, body_seq)
+    end_seq = compile_label(end_label)
+    return append_instructions(tack_instructions(para_seq, body_seq), end_seq)
 
 
 def compile_define_proc_compiled(expr: DefineProcExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
@@ -381,18 +383,23 @@ def compile_define_proc_compiled(expr: DefineProcExpr, target: CompileTarget, li
 
 
 def compile_call_operands(operands: List[Expression], compile_recursive: CompileRecurFuncType):
-    operands_sub_seqs = []
-    operands_sub_seqs.append(SchemeCompiledSeq(
-        [AssignMstmt('argl', OpMxpr('init_val_list', []))], set(), set(['argl'])))
+    init_seq = SchemeCompiledSeq(
+        [AssignMstmt('argl', OpMxpr('init_val_list', []))], set(), set(['argl']))
+
+    collect_sub_seqs = []
     for operand in operands:
-        sub_eval_seq = compile_recursive(
+        get_seq = compile_recursive(
             operand, 'val', SchemeLinkage(LinkageTag.NEXT))
-        sub_append_seq = SchemeCompiledSeq([PerformMstmt(OpMxpr('append_val_list', [
-                                           RegMxpr('argl'), RegMxpr('val')]))], set(['argl', 'val']), set(['argl']))
-        sub_seq = preserve_instructions(
-            set(['proc', 'argl', 'env']), sub_eval_seq, sub_append_seq)
-        operands_sub_seqs.append(sub_seq)
-    operands_seq = append_instructions(*operands_sub_seqs)
+        # mutating argl does not mean modifying argl
+        append_seq = SchemeCompiledSeq([PerformMstmt(OpMxpr('append_val_list', [
+            RegMxpr('argl'), RegMxpr('val')]))], set(['argl', 'val']), set())
+        collect_sub_seq = preserve_instructions(
+            set(['argl']), get_seq, append_seq)
+        collect_sub_seqs.append(collect_sub_seq)
+    collect_seq = preserve_instructions(
+        set(['argl', 'env']), *collect_sub_seqs)
+
+    return append_instructions(init_seq, collect_seq)
 
 
 def compile_call_branch(label_proc: str, label_prim: str, label_invalid: str):
@@ -408,9 +415,8 @@ def compile_call_branch(label_proc: str, label_prim: str, label_invalid: str):
     ], set(['proc']), set(['unev']))
 
 
-def compile_call_proc_arity(paren: Token, label_proc: str):
+def compile_call_proc_arity(paren: Token):
     check_seq = SchemeCompiledSeq([
-        LabelMstmt(label_proc),
         AssignMstmt('unev', OpMxpr('ec_check_proc_arity',
                                    [RegMxpr('proc'), RegMxpr('argl')])),
     ], set(['proc', 'argl']), set(['unev']))
@@ -444,7 +450,7 @@ def compile_call_proc_apply(target: CompileTarget, linkage: SchemeLinkage):
         ], set(['proc']), all_regs)
     elif target == 'val' and linkage.tag == LinkageTag.GOTO:
         return SchemeCompiledSeq([
-            AssignMstmt('continue', ConstMxpr(linkage.label)),
+            AssignMstmt('continue', LabelMxpr(cast(str, linkage.label))),
             AssignMstmt('val', OpMxpr(
                 'get_proc_compiled_body', [RegMxpr('proc')])),
             GotoMstmt(RegMxpr('val')),
@@ -453,28 +459,28 @@ def compile_call_proc_apply(target: CompileTarget, linkage: SchemeLinkage):
         '''only happens for call operator, and linkage should be a next, turned into goto'''
         label_ret = make_label('call-proc-ret')
         return SchemeCompiledSeq([
-            AssignMstmt('continue', ConstMxpr(label_ret)),
+            AssignMstmt('continue', LabelMxpr(label_ret)),
             AssignMstmt('val', OpMxpr(
                 'get_proc_compiled_body', [RegMxpr('proc')])),
             GotoMstmt(RegMxpr('val')),
             LabelMstmt(label_ret),
             AssignMstmt(target, RegMxpr('val')),
             GotoMstmt(LabelMxpr(cast(str, linkage.label)))
-        ], set(['proc', 'continue']), all_regs)
+        ], set(['proc']), all_regs)
     else:
         assert False
 
 
 def compile_call_proc(paren: Token, label_proc: str, target: CompileTarget, linkage: SchemeLinkage):
-    arity_seq = compile_call_proc_arity(paren, label_proc)
+    label_seq = compile_label(label_proc)
+    arity_seq = compile_call_proc_arity(paren)
     env_seq = compile_call_proc_env()
     apply_seq = compile_call_proc_apply(target, linkage)
-    return append_instructions(arity_seq, env_seq, apply_seq)
+    return append_instructions(label_seq, arity_seq, env_seq, apply_seq)
 
 
-def compile_call_prim_arity(paren: Token, label_prim: str):
+def compile_call_prim_arity(paren: Token):
     check_seq = SchemeCompiledSeq([
-        LabelMstmt(label_prim),
         AssignMstmt('unev', OpMxpr('ec_check_prim_arity',
                                    [RegMxpr('proc'), RegMxpr('argl')])),
     ], set(['proc', 'argl']), set(['unev']))
@@ -482,7 +488,7 @@ def compile_call_prim_arity(paren: Token, label_prim: str):
     return append_instructions(check_seq, error_seq)
 
 
-def compile_call_prim_apply(paren: Token, target: CompileTarget):
+def compile_call_prim_apply(paren: Token, target: CompileTarget, linkage: SchemeLinkage):
     apply_seq = SchemeCompiledSeq([
         AssignMstmt('val', OpMxpr(
             'call_prim', [RegMxpr('proc'), RegMxpr('argl')])),
@@ -492,22 +498,24 @@ def compile_call_prim_apply(paren: Token, target: CompileTarget):
     value_seq = SchemeCompiledSeq([
         AssignMstmt(target, OpMxpr('cdr', [RegMxpr('val')])),
     ], set(['val']), set([target]))
-    return append_instructions(apply_seq, error_seq, value_seq)
+    return end_with_linkage(linkage, append_instructions(apply_seq, error_seq, value_seq))
 
 
 def compile_call_prim(paren: Token, label_prim: str, target: CompileTarget, linkage: SchemeLinkage):
-    arity_seq = compile_call_prim_arity(paren, label_prim)
-    apply_seq = compile_call_prim_apply(paren, target)
-    return end_with_linkage(linkage, append_instructions(arity_seq, apply_seq))
+    label_seq = compile_label(label_prim)
+    arity_seq = compile_call_prim_arity(paren)
+    apply_seq = compile_call_prim_apply(paren, target, linkage)
+    return append_instructions(label_seq, arity_seq, apply_seq)
 
 
-def compile_call_invalid(paren: Token):
+def compile_call_invalid(paren: Token, label_invalid: str):
     '''error must invoke, so no more sequence after error_seq'''
+    label_seq = compile_label(label_invalid)
     check_seq = SchemeCompiledSeq([
         AssignMstmt('unev', OpMxpr('ec_eval_call_invalid', [RegMxpr('proc')]))
     ], set(['proc']), set(['unev']))
     error_seq = compile_error_call('unev', paren)
-    return append_instructions(check_seq, error_seq)
+    return append_instructions(label_seq, check_seq, error_seq)
 
 
 def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
@@ -528,16 +536,18 @@ def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage, 
         expr.paren, label_proc, target, branch_linkage)
     prim_seq = compile_call_prim(
         expr.paren, label_prim, target, branch_linkage)
-    invalid_seq = compile_call_invalid(expr.paren)
+    invalid_seq = compile_call_invalid(expr.paren, label_invalid)
     body_seq = parallel_instructions(proc_seq, prim_seq, invalid_seq)
 
     end_seq = compile_label(label_end)
 
-    final_seq = preserve_instructions(set(['env']), operator_seq, operands_seq)
-    final_seq = preserve_instructions(set(['proc']), final_seq, branch_seq)
+    final_seq = append_instructions(body_seq, end_seq)
     final_seq = preserve_instructions(
-        set(['env', 'proc', 'argl', 'continue']), final_seq, body_seq)
-    final_seq = append_instructions(final_seq, end_seq)
+        set(['env', 'proc', 'argl', 'continue']), branch_seq, final_seq)
+    final_seq = preserve_instructions(
+        set(['env', 'proc', 'continue']), operands_seq, final_seq)
+    final_seq = preserve_instructions(
+        set(['env', 'continue']), operator_seq, final_seq)
     return final_seq
 
 
@@ -552,7 +562,8 @@ def install_compile_rules():
         SetExpr: compile_set,
         DefineVarExpr: compile_define_var,
         DefineProcExpr: compile_define_proc_compiled,
-        SequenceExpr: compile_sequence
+        SequenceExpr: compile_sequence,
+        CallExpr: compile_call
     }
     update_compile_rules(rules)
 
@@ -571,13 +582,16 @@ def install_operations_compile():
         'ec_env_set_at': ec_env_set_at,
         'ec_env_define': ec_env_define,
         'ec_env_extend': ec_env_extend,
+        'get_val_type': get_val_type,
         'init_val_list': init_val_list,
         'append_val_list': append_val_list,
+        'get_proc_env': get_proc_env,
         'get_call_parameters': get_call_parameters,
         'get_call_arguments': get_call_arguments,
         'ec_check_prim_arity': ec_check_prim_arity,
         'ec_check_proc_arity': ec_check_proc_arity,
         'ec_eval_call_invalid': ec_eval_call_invalid,
+        'call_prim': call_prim,
 
         'make_proc_compiled': make_proc_compiled,
         'get_proc_compiled_body': get_proc_compiled_body,
@@ -729,7 +743,6 @@ def test_error():
         'x',
         panic='runtime error at SYMBOL:x in line 1: symbol undefined'
     )
-    return
     test_one(
         '''
         (define (f a b . c) c)
@@ -757,7 +770,7 @@ def test_expr():
         2
         "string"
         ()
-        # f
+        #f
         x
         ''',
         result='1'
@@ -898,7 +911,7 @@ def install_rules():
     # compile rules
     install_assemble_mxpr_compile_rules()
     install_stringify_mxpr_compile_rules()
-    install_stringify_value_compile_rules
+    install_stringify_value_compile_rules()
     install_operations_compile()
     install_compile_rules()
 
