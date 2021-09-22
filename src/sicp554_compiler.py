@@ -465,12 +465,12 @@ def compile_call_operands(operands: List[Expression], compile_recursive: Compile
     return append_instructions(init_seq, collect_seq)
 
 
-def compile_call_branch(label_proc: str, label_prim: str, label_invalid: str):
+def compile_call_branch(label_proc_compiled: str, label_prim: str, label_invalid: str):
     return SchemeCompiledSeq([
         AssignMstmt('unev', OpMxpr('get_val_type', [RegMxpr('proc')])),
         TestMstmt(
             OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(StringVal('ProcCompiledVal'))])),
-        BranchMstmt(LabelMxpr(label_proc)),
+        BranchMstmt(LabelMxpr(label_proc_compiled)),
         TestMstmt(
             OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(StringVal('PrimVal'))])),
         BranchMstmt(LabelMxpr(label_prim)),
@@ -592,21 +592,21 @@ def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage,
         expr.operator, 'proc', SchemeLinkage(LinkageTag.NEXT))
     operands_seq = compile_call_operands(expr.operands, compile_recursive)
 
-    label_proc = make_label('call-proc-compiled')
+    label_proc_compiled = make_label('call-proc-compiled')
     label_prim = make_label('call-prim')
     label_invalid = make_label('call-invalid')
-    branch_seq = compile_call_branch(label_proc, label_prim, label_invalid)
+    branch_seq = compile_call_branch(label_proc_compiled, label_prim, label_invalid)
 
     label_end = make_label('call-end')
     branch_linkage = SchemeLinkage(
         LinkageTag.GOTO, label_end) if linkage.tag == LinkageTag.NEXT else linkage
 
-    proc_seq = compile_call_proc_compiled(
-        expr.paren, label_proc, target, branch_linkage)
+    proc_compiled_seq = compile_call_proc_compiled(
+        expr.paren, label_proc_compiled, target, branch_linkage)
     prim_seq = compile_call_prim(
         expr.paren, label_prim, target, branch_linkage)
     invalid_seq = compile_call_invalid(expr.paren, label_invalid)
-    body_seq = parallel_instructions(proc_seq, prim_seq, invalid_seq)
+    body_seq = parallel_instructions(proc_compiled_seq, prim_seq, invalid_seq)
 
     end_seq = compile_label(label_end)
 
