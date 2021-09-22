@@ -1,6 +1,6 @@
 import enum
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, cast
-from sicp414_evaluator import BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, GenericExpr, NilExpr, NumberExpr, NumberVal, ProcVal, QuoteExpr, SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value, update_stringify_value_rules
+from sicp414_evaluator import BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, GenericExpr, LambdaExpr, NilExpr, NumberExpr, NumberVal, ProcVal, QuoteExpr, SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value, update_stringify_value_rules
 from sicp416_resolver import ResDistancesType, install_resolver_rules, resolve_expr
 from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, Mxpr, OpMxpr, PerformMstmt, RegInstPtr, RegMachineState, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, make_run_machine, update_assemble_mxpr_rules, update_operations
 from sicp544_ec_evaluator import append_val_list, call_prim, concat_token_message, ec_check_prim_arity, ec_check_proc_arity, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, ec_eval_call_invalid, get_call_arguments, get_call_parameters, get_proc_env, get_val_type, goto_panic, init_val_list, print_code_list, stringify_inst_data
@@ -349,38 +349,40 @@ def stringify_value_procedure_static(sv: ProcStaticVal):
     return '[procedure-static %s]' % sv.name
 
 
-def compile_define_proc_parameters(expr: DefineProcExpr, target: CompileTarget, body_label: str, end_label: str):
-    name: str = expr.name.literal
-    pos_paras = [s.literal for s in expr.pos_paras]
-    rest_para = expr.rest_para.literal if expr.rest_para is not None else None
+def compile_define_proc_parameters(name_str: str, pos_paras: List[Token], rest_para: Optional[Token],
+                                   target: CompileTarget, body_label: str, end_label: str):
+    pos_para_strs = [s.literal for s in pos_paras]
+    rest_para_str = rest_para.literal if rest_para is not None else None
     return SchemeCompiledSeq([
-        AssignMstmt(target, ProcMxpr(name, pos_paras, rest_para, body_label)),
+        AssignMstmt(target, ProcMxpr(
+            name_str, pos_para_strs, rest_para_str, body_label)),
         AssignMstmt(target, OpMxpr('make_proc_compiled',
                                    [RegMxpr(target), RegMxpr('env')])),
-        GotoMstmt(LabelMxpr(end_label)) # jump over body instructions
+        GotoMstmt(LabelMxpr(end_label))  # jump over body instructions
     ], set(['env']), set([target]))
 
 
-def compile_define_proc_body(expr: DefineProcExpr, body_label: str, compile_recursive: CompileRecurFuncType):
-    body_label_seq = SchemeCompiledSeq([
-        LabelMstmt(body_label),
-    ], set([]), set([]))
-    body_code_seq = compile_recursive(
-        expr.body, 'val', SchemeLinkage(LinkageTag.RETURN))
-    return append_instructions(body_label_seq, body_code_seq)
+def compile_define_proc_body(body: SequenceExpr, body_label: str, compile_recursive: CompileRecurFuncType):
+    label_seq = compile_label(body_label)
+    code_seq = compile_recursive(body, 'val', SchemeLinkage(LinkageTag.RETURN))
+    return append_instructions(label_seq, code_seq)
 
 
-def compile_define_proc_value(expr: DefineProcExpr, target: CompileTarget, compile_recursive: CompileRecurFuncType):
+def compile_define_proc_value(name_str: str, pos_paras: List[Token], rest_para: Optional[Token], body: SequenceExpr,
+                              target: CompileTarget, compile_recursive: CompileRecurFuncType):
     body_label = make_label('proc-body')
     end_label = make_label('proc-end')
-    para_seq = compile_define_proc_parameters(expr, target, body_label, end_label)
-    body_seq = compile_define_proc_body(expr, body_label, compile_recursive)
+    para_seq = compile_define_proc_parameters(
+        name_str, pos_paras, rest_para, target, body_label, end_label)
+    body_seq = compile_define_proc_body(body, body_label, compile_recursive)
     end_seq = compile_label(end_label)
     return append_instructions(tack_instructions(para_seq, body_seq), end_seq)
 
 
-def compile_define_proc_compiled(expr: DefineProcExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
-    proc_value_seq = compile_define_proc_value(expr, 'val', compile_recursive)
+def compile_define_proc_compiled(expr: DefineProcExpr, target: CompileTarget, linkage: SchemeLinkage,
+                                 compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+    proc_value_seq = compile_define_proc_value(
+        expr.name.literal, expr.pos_paras, expr.rest_para, expr.body, 'val', compile_recursive)
     def_seq = compile_define_any(expr.name, 'val', target)
     return end_with_linkage(linkage, append_instructions(proc_value_seq, def_seq))
 
@@ -554,6 +556,12 @@ def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage, 
     return final_seq
 
 
+def compile_lambda(expr: LambdaExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+    proc_value_seq = compile_define_proc_value(
+        'lambda', expr.pos_paras, expr.rest_para, expr.body, target, compile_recursive)
+    return end_with_linkage(linkage, proc_value_seq)
+
+
 def install_compile_rules():
     rules = {
         SymbolExpr: compile_symbol,
@@ -566,7 +574,8 @@ def install_compile_rules():
         DefineVarExpr: compile_define_var,
         DefineProcExpr: compile_define_proc_compiled,
         SequenceExpr: compile_sequence,
-        CallExpr: compile_call
+        CallExpr: compile_call,
+        LambdaExpr: compile_lambda
     }
     update_compile_rules(rules)
 
@@ -778,7 +787,6 @@ def test_expr():
         ''',
         result='1'
     )
-    return
     test_one(
         '((lambda (x) (+ x 1)) 2)',
         result='3',
@@ -790,6 +798,7 @@ def test_expr():
         ''',
         result='3',
     )
+    return
     test_one(
         '(if #t (if 3 4) 2)',
         result='4',
