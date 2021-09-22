@@ -47,7 +47,7 @@ from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, La
 from sicp544_ec_evaluator import append_val_list, boolean_not, boolean_true, call_prim, concat_token_message, \
     ec_check_prim_arity, ec_check_proc_arity, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, \
     ec_eval_call_invalid, get_call_arguments, get_call_parameters, get_proc_env, get_val_type, goto_panic, \
-    init_val_list, print_code_list, stringify_inst_data
+    init_val_list, prepare_source, print_code_list, stringify_inst_data
 from sicp524_monitor import MachineStatistic, StringifyInstDataFuncType, TraceState, monitor_statistics, \
     install_stringify_mstmt_rules, install_stringify_mxpr_rules, trace_machine, update_stringify_mxpr_rules
 
@@ -804,19 +804,10 @@ def test_one(source: str, **kargs: str):
     # source
     source = source.strip()
     print('* source: %s' % source)
+    expr, distances = prepare_source(source)
 
     try:
         try:
-            # scan
-            tokens = scan_source(source)
-
-            # parse
-            combos = parse_tokens(tokens)
-            expr = parse_expr(combos)
-
-            # resolve
-            distances = resolve_expr(expr)
-
             # compile
             code = compile_expr(expr, distances).code
             print('compiled code:')
@@ -866,19 +857,10 @@ def test_one_recursion(source_tmpl: str, name: str, nrng: Tuple[int, int], get_v
     for nval in range(*nrng):
         # source
         source = source_tmpl % nval
+        expr, distances = prepare_source(source)
 
         # try:
         try:
-            # scan
-            tokens = scan_source(source)
-
-            # parse
-            combos = parse_tokens(tokens)
-            expr = parse_expr(combos)
-
-            # resolve
-            distances = resolve_expr(expr)
-
             # compile
             code = compile_expr(expr, distances).code
             # print('compiled code:')

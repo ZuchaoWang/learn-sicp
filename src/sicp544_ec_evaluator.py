@@ -60,7 +60,7 @@ from sicp524_monitor import MachineStatistic, TraceState, install_stringify_mstm
     monitor_statistics, stringify_mstmt, trace_machine
 
 # fmt: off
-ec_eval_code_list = [
+ec_eval_code_list: List[Mstmt] = [
   LabelMstmt('main'),
     AssignMstmt('continue', LabelMxpr('done')),
 
@@ -261,7 +261,7 @@ ec_eval_code_list = [
     AssignMstmt('unev', OpMxpr('get_call_parameters', [RegMxpr('proc')])),
     AssignMstmt('unev2', OpMxpr('get_call_arguments', [RegMxpr('proc'), RegMxpr('argl')])),
     AssignMstmt('env', OpMxpr('ec_env_extend', [RegMxpr('env'), RegMxpr('unev'), RegMxpr('unev2')])),
-    AssignMstmt('expr', OpMxpr('get_proc_plain_val_body', [RegMxpr('proc')])),
+    AssignMstmt('expr', OpMxpr('get_proc_plain_body', [RegMxpr('proc')])),
     GotoMstmt(LabelMxpr('ev-sequence')),
 
   LabelMstmt('ev-call-prim'),
@@ -555,7 +555,7 @@ def get_call_operands(expr: CallExpr):
     return expr.operands
 
 
-def get_proc_plain_val_body(proc: ProcPlainVal):
+def get_proc_plain_body(proc: ProcPlainVal):
     return proc.body
 
 
@@ -677,7 +677,7 @@ def install_operations_ec():
         'get_paren_token': get_paren_token,
         'get_call_operator': get_call_operator,
         'get_call_operands': get_call_operands,
-        'get_proc_plain_val_body': get_proc_plain_val_body,
+        'get_proc_plain_body': get_proc_plain_body,
         'get_proc_env': get_proc_env,
         'get_call_parameters': get_call_parameters,
         'get_call_arguments': get_call_arguments,
@@ -728,23 +728,21 @@ ec_eval_regs = {
 }
 
 
+def prepare_source(source: str):
+    tokens = scan_source(source)
+    combos = parse_tokens(tokens)
+    expr = parse_expr(combos)
+    distances = resolve_expr(expr)
+    return expr, distances
+
+
 def test_one(source: str, **kargs: str):
-    # source
     source = source.strip()
     print('* source: %s' % source)
+    expr, distances = prepare_source(source)
 
     try:
         try:
-            # scan
-            tokens = scan_source(source)
-
-            # parse
-            combos = parse_tokens(tokens)
-            expr = parse_expr(combos)
-
-            # resolve
-            distances = resolve_expr(expr)
-
             # build machine
             ops = get_operations()
             glbenv = make_global_env()
@@ -790,18 +788,9 @@ def test_one_recursion(source_tmpl: str, name: str, nrng: Tuple[int, int], get_v
     for nval in range(*nrng):
         # source
         source = source_tmpl % nval
+        expr, distances = prepare_source(source)
 
         try:
-            # scan
-            tokens = scan_source(source)
-
-            # parse
-            combos = parse_tokens(tokens)
-            expr = parse_expr(combos)
-
-            # resolve
-            distances = resolve_expr(expr)
-
             # build machine
             ops = get_operations()
             glbenv = make_global_env()
@@ -1014,8 +1003,8 @@ def print_code_list(code_list: List[Mstmt]):
             print(stringify_mstmt(code, stringify_inst_data))
 
 
-def print_ec_eval_code():
-    print('ec_eval_code:')
+def print_ec_eval_code_list():
+    print('ec_eval_code_list:')
     print_code_list(ec_eval_code_list)
     print('----------')
 
@@ -1029,5 +1018,5 @@ def test():
 
 if __name__ == '__main__':
     install_rules()
-    print_ec_eval_code()
+    print_ec_eval_code_list()
     test()
