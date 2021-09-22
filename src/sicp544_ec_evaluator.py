@@ -203,7 +203,7 @@ ec_eval_code_list = [
     # each time we must create a new empty list
     # therefore we must call op init_val_list
     # we cannot assign from a const [], otherwise that [] will be mutated and reused
-    # an alternative solution is to not mutate to [], instead every append create a new one
+    # an else solution is to not mutate to [], instead every append create a new one
     AssignMstmt('argl', OpMxpr('init_val_list', [])),
     RestoreMstmt('unev'),
     RestoreMstmt('env'),
@@ -296,18 +296,18 @@ ec_eval_code_list = [
     RestoreMstmt('continue'),
     # although we can directly assign val to flag, we still follow the convention to use test
     TestMstmt(OpMxpr('true?', [RegMxpr('val')])),
-    BranchMstmt(LabelMxpr('ev-if-consequent')),
-    TestMstmt(OpMxpr('has_if_alternative', [RegMxpr('expr')])),
-    BranchMstmt(LabelMxpr('ev-if-alternative')),
-    # no alternative
+    BranchMstmt(LabelMxpr('ev-if-then')),
+    TestMstmt(OpMxpr('has_if_else', [RegMxpr('expr')])),
+    BranchMstmt(LabelMxpr('ev-if-else')),
+    # no else
     AssignMstmt('val', ConstMxpr(UndefVal())),
     GotoMstmt(RegMxpr('continue')),
     # tail recursion supported
-  LabelMstmt('ev-if-consequent'),
-    AssignMstmt('expr', OpMxpr('get_if_consequent', [RegMxpr('expr')])),
+  LabelMstmt('ev-if-then'),
+    AssignMstmt('expr', OpMxpr('get_if_then', [RegMxpr('expr')])),
     GotoMstmt(LabelMxpr('eval-dispatch')),
-  LabelMstmt('ev-if-alternative'),
-    AssignMstmt('expr', OpMxpr('get_if_alternative', [RegMxpr('expr')])),
+  LabelMstmt('ev-if-else'),
+    AssignMstmt('expr', OpMxpr('get_if_else', [RegMxpr('expr')])),
     GotoMstmt(LabelMxpr('eval-dispatch')),
 
   LabelMstmt('ev-set'),
@@ -587,15 +587,15 @@ def get_if_predicate(expr: IfExpr):
     return expr.pred
 
 
-def get_if_consequent(expr: IfExpr):
+def get_if_then(expr: IfExpr):
     return expr.then_branch
 
 
-def get_if_alternative(expr: IfExpr):
+def get_if_else(expr: IfExpr):
     return expr.else_branch
 
 
-def has_if_alternative(expr: IfExpr):
+def has_if_else(expr: IfExpr):
     return BooleanVal(expr.else_branch is not None)
 
 
@@ -686,9 +686,9 @@ def install_operations_ec():
         'get_val_type': get_val_type,
         'call_prim': call_prim,
         'get_if_predicate': get_if_predicate,
-        'get_if_consequent': get_if_consequent,
-        'get_if_alternative': get_if_alternative,
-        'has_if_alternative': has_if_alternative,
+        'get_if_then': get_if_then,
+        'get_if_else': get_if_else,
+        'has_if_else': has_if_else,
         'get_var_name': get_var_name,
         'get_var_symbol': get_var_symbol,
         'get_var_init': get_var_init,

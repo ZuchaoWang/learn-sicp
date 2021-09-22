@@ -1,9 +1,9 @@
 import enum
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, cast
-from sicp414_evaluator import BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, GenericExpr, LambdaExpr, NilExpr, NumberExpr, NumberVal, ProcVal, QuoteExpr, SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value, update_stringify_value_rules
+from sicp414_evaluator import BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, GenericExpr, IfExpr, LambdaExpr, NilExpr, NumberExpr, NumberVal, ProcVal, QuoteExpr, SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value, update_stringify_value_rules
 from sicp416_resolver import ResDistancesType, install_resolver_rules, resolve_expr
 from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, Mxpr, OpMxpr, PerformMstmt, RegInstPtr, RegMachineState, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, make_run_machine, update_assemble_mxpr_rules, update_operations
-from sicp544_ec_evaluator import append_val_list, call_prim, concat_token_message, ec_check_prim_arity, ec_check_proc_arity, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, ec_eval_call_invalid, get_call_arguments, get_call_parameters, get_proc_env, get_val_type, goto_panic, init_val_list, print_code_list, stringify_inst_data
+from sicp544_ec_evaluator import append_val_list, boolean_true, call_prim, concat_token_message, ec_check_prim_arity, ec_check_proc_arity, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, ec_eval_call_invalid, get_call_arguments, get_call_parameters, get_proc_env, get_val_type, goto_panic, init_val_list, print_code_list, stringify_inst_data
 from sicp524_monitor import MachineStatistic, StringifyInstDataFuncType, TraceState, monitor_statistics, install_stringify_mstmt_rules, install_stringify_mxpr_rules, trace_machine, update_stringify_mxpr_rules
 
 
@@ -562,6 +562,37 @@ def compile_lambda(expr: LambdaExpr, target: CompileTarget, linkage: SchemeLinka
     return end_with_linkage(linkage, proc_value_seq)
 
 
+def compile_if(expr: IfExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+    label_then = make_label('if-then')
+    label_end = make_label('if-end')
+
+    pred_seq = compile_recursive(
+        expr.pred, 'val', SchemeLinkage(LinkageTag.NEXT))
+    branch_seq = SchemeCompiledSeq([
+        TestMstmt(OpMxpr('true?', [RegMxpr('val')])),
+        BranchMstmt(LabelMxpr(label_then)),
+    ], set(['val']), set())
+    front_seq = append_instructions(pred_seq, branch_seq)
+
+    lkg_else = SchemeLinkage(
+        LinkageTag.GOTO, label_end) if linkage.tag == LinkageTag.NEXT else linkage
+    if expr.else_branch is None:
+        else_seq = end_with_linkage(lkg_else, SchemeCompiledSeq([
+            AssignMstmt(target, ConstMxpr(UndefVal())),
+        ], set(), set()))
+    else:
+        else_seq = compile_recursive(expr.else_branch, target, lkg_else)
+
+    label_then_seq = compile_label(label_then)
+    label_end_seq = compile_label(label_end)
+    then_seq = compile_recursive(expr.then_branch, target, linkage)
+    then_seq = append_instructions(label_then_seq, then_seq, label_end_seq)
+
+    tail_seq = parallel_instructions(else_seq, then_seq)
+
+    return preserve_instructions(set(['env', 'continue']), front_seq, tail_seq)
+
+
 def install_compile_rules():
     rules = {
         SymbolExpr: compile_symbol,
@@ -575,7 +606,8 @@ def install_compile_rules():
         DefineProcExpr: compile_define_proc_compiled,
         SequenceExpr: compile_sequence,
         CallExpr: compile_call,
-        LambdaExpr: compile_lambda
+        LambdaExpr: compile_lambda,
+        IfExpr: compile_if
     }
     update_compile_rules(rules)
 
@@ -604,6 +636,7 @@ def install_operations_compile():
         'ec_check_proc_arity': ec_check_proc_arity,
         'ec_eval_call_invalid': ec_eval_call_invalid,
         'call_prim': call_prim,
+        'true?': boolean_true,
 
         'make_proc_compiled': make_proc_compiled,
         'get_proc_compiled_body': get_proc_compiled_body,
@@ -798,11 +831,11 @@ def test_expr():
         ''',
         result='3',
     )
-    return
     test_one(
         '(if #t (if 3 4) 2)',
         result='4',
     )
+    return
     test_one(
         '(and (+ 1 2) (or (not #t) (list 3 4)))',
         result='(3 4)',
