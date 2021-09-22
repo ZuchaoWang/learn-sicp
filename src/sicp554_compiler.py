@@ -31,7 +31,7 @@ in that case not only do we have to support strange const data type in ops, but 
 '''
 
 import enum
-from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, cast
+from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, Union, cast
 from sicp414_evaluator import AndExpr, BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, \
     GenericExpr, IfExpr, LambdaExpr, NilExpr, NotExpr, NumberExpr, NumberVal, OrExpr, ProcVal, QuoteExpr, \
     SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, \
@@ -498,8 +498,40 @@ def compile_call_proc_env():
     ], set(['proc', 'argl', 'env']), set(['unev', 'unev2', 'env']))
 
 
-def compile_call_proc_apply(target: CompileTarget, linkage: SchemeLinkage):
+def compile_call_proc_any_apply(target: CompileTarget, goto_body_seq: SchemeCompiledSeq, linkage: SchemeLinkage):
     assert linkage.tag != LinkageTag.NEXT
+    if target == 'val' and linkage.tag == LinkageTag.RETURN:
+        '''proc body is suited to this simplest case and most frequent case'''
+        return goto_body_seq
+    elif target == 'val' and linkage.tag == LinkageTag.GOTO:
+        cont_seq = SchemeCompiledSeq([AssignMstmt('continue', LabelMxpr(
+            cast(str, linkage.label)))], set([]), set(['continue']))
+        return append_instructions(cont_seq, goto_body_seq)
+    elif target != 'val' and linkage.tag == LinkageTag.GOTO:
+        '''only happens for call operator, and linkage should be a next, turned into goto'''
+        label_ret = make_label('call-proc-ret')
+        cont_seq = SchemeCompiledSeq(
+            [AssignMstmt('continue', LabelMxpr(label_ret))], set([]), set(['continue']))
+        ret_seq = SchemeCompiledSeq([
+            LabelMstmt(label_ret),
+            AssignMstmt(target, RegMxpr('val')),
+            GotoMstmt(LabelMxpr(cast(str, linkage.label)))
+        ], set(['val']), set([target]))
+        return append_instructions(cont_seq, goto_body_seq, ret_seq)
+    else:
+        assert False
+
+
+def compile_call_proc_any(paren: Token, label_proc: str, target: CompileTarget,
+                          goto_body_seq: SchemeCompiledSeq, linkage: SchemeLinkage):
+    label_seq = compile_label(label_proc)
+    arity_seq = compile_call_proc_arity(paren)
+    env_seq = compile_call_proc_env()
+    apply_seq = compile_call_proc_any_apply(target, goto_body_seq, linkage)
+    return append_instructions(label_seq, arity_seq, env_seq, apply_seq)
+
+
+def compile_call_proc_compiled(paren: Token, label_proc: str, target: CompileTarget, linkage: SchemeLinkage):
     '''
     we don't know which proc is called, so potentially every reg can change
     including pc and flag, but no need to list them here
@@ -507,41 +539,12 @@ def compile_call_proc_apply(target: CompileTarget, linkage: SchemeLinkage):
     '''
     all_regs = set(['val', 'unev', 'unev2', 'unev3',
                     'proc', 'argl', 'continue', 'env'])
-    if target == 'val' and linkage.tag == LinkageTag.RETURN:
-        return SchemeCompiledSeq([
-            AssignMstmt('val', OpMxpr(
-                'get_proc_compiled_body', [RegMxpr('proc')])),
-            GotoMstmt(RegMxpr('val')),
-        ], set(['proc']), all_regs)
-    elif target == 'val' and linkage.tag == LinkageTag.GOTO:
-        return SchemeCompiledSeq([
-            AssignMstmt('continue', LabelMxpr(cast(str, linkage.label))),
-            AssignMstmt('val', OpMxpr(
-                'get_proc_compiled_body', [RegMxpr('proc')])),
-            GotoMstmt(RegMxpr('val')),
-        ], set(['proc']), all_regs)
-    elif target != 'val' and linkage.tag == LinkageTag.GOTO:
-        '''only happens for call operator, and linkage should be a next, turned into goto'''
-        label_ret = make_label('call-proc-ret')
-        return SchemeCompiledSeq([
-            AssignMstmt('continue', LabelMxpr(label_ret)),
-            AssignMstmt('val', OpMxpr(
-                'get_proc_compiled_body', [RegMxpr('proc')])),
-            GotoMstmt(RegMxpr('val')),
-            LabelMstmt(label_ret),
-            AssignMstmt(target, RegMxpr('val')),
-            GotoMstmt(LabelMxpr(cast(str, linkage.label)))
-        ], set(['proc']), all_regs)
-    else:
-        assert False
-
-
-def compile_call_proc(paren: Token, label_proc: str, target: CompileTarget, linkage: SchemeLinkage):
-    label_seq = compile_label(label_proc)
-    arity_seq = compile_call_proc_arity(paren)
-    env_seq = compile_call_proc_env()
-    apply_seq = compile_call_proc_apply(target, linkage)
-    return append_instructions(label_seq, arity_seq, env_seq, apply_seq)
+    goto_body_seq = SchemeCompiledSeq([
+        AssignMstmt('val', OpMxpr(
+            'get_proc_compiled_body', [RegMxpr('proc')])),
+        GotoMstmt(RegMxpr('val')),
+    ], set(['proc']), all_regs)
+    return compile_call_proc_any(paren, label_proc, target, goto_body_seq, linkage)
 
 
 def compile_call_prim_arity(paren: Token):
@@ -598,7 +601,7 @@ def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage,
     branch_linkage = SchemeLinkage(
         LinkageTag.GOTO, label_end) if linkage.tag == LinkageTag.NEXT else linkage
 
-    proc_seq = compile_call_proc(
+    proc_seq = compile_call_proc_compiled(
         expr.paren, label_proc, target, branch_linkage)
     prim_seq = compile_call_prim(
         expr.paren, label_prim, target, branch_linkage)
