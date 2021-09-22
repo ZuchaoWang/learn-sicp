@@ -3,7 +3,7 @@ from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, ca
 from sicp414_evaluator import BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, GenericExpr, NilExpr, NumberExpr, NumberVal, ProcVal, QuoteExpr, SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value, update_stringify_value_rules
 from sicp416_resolver import ResDistancesType, install_resolver_rules, resolve_expr
 from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, Mxpr, OpMxpr, PerformMstmt, RegInstPtr, RegMachineState, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, make_run_machine, update_assemble_mxpr_rules, update_operations
-from sicp544_ec_evaluator import append_val_list, concat_token_message, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, goto_panic, init_val_list, print_code_list, stringify_inst_data
+from sicp544_ec_evaluator import append_val_list, concat_token_message, ec_check_prim_arity, ec_check_proc_arity, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, ec_eval_call_invalid, get_call_arguments, get_call_parameters, goto_panic, init_val_list, print_code_list, stringify_inst_data
 from sicp524_monitor import MachineStatistic, StringifyInstDataFuncType, TraceState, monitor_statistics, install_stringify_mstmt_rules, install_stringify_mxpr_rules, trace_machine, update_stringify_mxpr_rules
 
 
@@ -86,7 +86,7 @@ def reset_label():
 
 def compile_label(label: str):
     '''usually this label comes from make_label'''
-    return SchemeCompiledSeq([LabelMstmt(label)], set(), set())   
+    return SchemeCompiledSeq([LabelMstmt(label)], set(), set())
 
 
 @enum.unique
@@ -238,7 +238,8 @@ def compile_define_any(name: Token, source: str, target: CompileTarget):
 
 
 def compile_define_var(expr: DefineVarExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
-    init_seq = compile_recursive(expr.initializer, 'val', SchemeLinkage(LinkageTag.NEXT))
+    init_seq = compile_recursive(
+        expr.initializer, 'val', SchemeLinkage(LinkageTag.NEXT))
     def_seq = compile_define_any(expr.name, 'val', target)
     return end_with_linkage(linkage, append_instructions(init_seq, def_seq))
 
@@ -353,7 +354,7 @@ def compile_define_proc_parameters(expr: DefineProcExpr, target: CompileTarget, 
     return SchemeCompiledSeq([
         AssignMstmt(target, ProcMxpr(name, pos_paras, rest_para, body_label)),
         AssignMstmt(target, OpMxpr('make_proc_compiled',
-                    [RegMxpr(target), RegMxpr('env')])),
+                                   [RegMxpr(target), RegMxpr('env')])),
     ], set(['env']), set([target]))
 
 
@@ -384,9 +385,12 @@ def compile_call_operands(operands: List[Expression], compile_recursive: Compile
     operands_sub_seqs.append(SchemeCompiledSeq(
         [AssignMstmt('argl', OpMxpr('init_val_list', []))], set(), set(['argl'])))
     for operand in operands:
-        sub_seq = preserve_instructions(set(['proc', 'argl', 'env']),
-            compile_recursive(operand, 'val', SchemeLinkage(LinkageTag.NEXT)),
-            SchemeCompiledSeq([PerformMstmt(OpMxpr('append_val_list', [RegMxpr('argl'), RegMxpr('val')]))], set(['argl', 'val']), set(['argl'])))
+        sub_eval_seq = compile_recursive(
+            operand, 'val', SchemeLinkage(LinkageTag.NEXT))
+        sub_append_seq = SchemeCompiledSeq([PerformMstmt(OpMxpr('append_val_list', [
+                                           RegMxpr('argl'), RegMxpr('val')]))], set(['argl', 'val']), set(['argl']))
+        sub_seq = preserve_instructions(
+            set(['proc', 'argl', 'env']), sub_eval_seq, sub_append_seq)
         operands_sub_seqs.append(sub_seq)
     operands_seq = append_instructions(*operands_sub_seqs)
 
@@ -394,9 +398,11 @@ def compile_call_operands(operands: List[Expression], compile_recursive: Compile
 def compile_call_branch(label_proc: str, label_prim: str, label_invalid: str):
     return SchemeCompiledSeq([
         AssignMstmt('unev', OpMxpr('get_val_type', [RegMxpr('proc')])),
-        TestMstmt(OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(StringVal('ProcCompiledVal'))])),
+        TestMstmt(
+            OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(StringVal('ProcCompiledVal'))])),
         BranchMstmt(LabelMxpr(label_proc)),
-        TestMstmt(OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(StringVal('PrimVal'))])),
+        TestMstmt(
+            OpMxpr('equal?', [RegMxpr('unev'), ConstMxpr(StringVal('PrimVal'))])),
         BranchMstmt(LabelMxpr(label_prim)),
         GotoMstmt(LabelMxpr(label_invalid))
     ], set(['proc']), set(['unev']))
@@ -405,8 +411,9 @@ def compile_call_branch(label_proc: str, label_prim: str, label_invalid: str):
 def compile_call_proc_arity(paren: Token, label_proc: str):
     check_seq = SchemeCompiledSeq([
         LabelMstmt(label_proc),
-        AssignMstmt('unev', OpMxpr('ec_check_proc_arity', [RegMxpr('proc'), RegMxpr('argl')])),
-    ], set(['proc', 'argl']), set(['unev']))    
+        AssignMstmt('unev', OpMxpr('ec_check_proc_arity',
+                                   [RegMxpr('proc'), RegMxpr('argl')])),
+    ], set(['proc', 'argl']), set(['unev']))
     error_seq = compile_error_call('unev', paren)
     return append_instructions(check_seq, error_seq)
 
@@ -415,8 +422,10 @@ def compile_call_proc_env():
     return SchemeCompiledSeq([
         AssignMstmt('env', OpMxpr('get_proc_env', [RegMxpr('proc')])),
         AssignMstmt('unev', OpMxpr('get_call_parameters', [RegMxpr('proc')])),
-        AssignMstmt('unev2', OpMxpr('get_call_arguments', [RegMxpr('proc'), RegMxpr('argl')])),
-        AssignMstmt('env', OpMxpr('ec_env_extend', [RegMxpr('env'), RegMxpr('unev'), RegMxpr('unev2')])),
+        AssignMstmt('unev2', OpMxpr('get_call_arguments',
+                                    [RegMxpr('proc'), RegMxpr('argl')])),
+        AssignMstmt('env', OpMxpr('ec_env_extend', [
+                    RegMxpr('env'), RegMxpr('unev'), RegMxpr('unev2')])),
     ], set(['proc', 'argl', 'env']), set(['unev', 'unev2', 'env']))
 
 
@@ -424,16 +433,20 @@ def compile_call_proc_apply(target: CompileTarget, linkage: SchemeLinkage):
     assert linkage.tag != LinkageTag.NEXT
     # we don't know which proc is called, so potentially every reg can change
     # including pc and flag, but no need to list them here
-    all_regs = set(['val', 'unev', 'unev2', 'unev3', 'proc', 'argl', 'continue', 'env'])
+    # this relates to tail recursion, so we use special processing, instead of end_with_linkage
+    all_regs = set(['val', 'unev', 'unev2', 'unev3',
+                    'proc', 'argl', 'continue', 'env'])
     if target == 'val' and linkage.tag == LinkageTag.RETURN:
         return SchemeCompiledSeq([
-            AssignMstmt('val', OpMxpr('get_proc_compiled_body', [RegMxpr('proc')])),
+            AssignMstmt('val', OpMxpr(
+                'get_proc_compiled_body', [RegMxpr('proc')])),
             GotoMstmt(RegMxpr('val')),
         ], set(['proc']), all_regs)
     elif target == 'val' and linkage.tag == LinkageTag.GOTO:
         return SchemeCompiledSeq([
             AssignMstmt('continue', ConstMxpr(linkage.label)),
-            AssignMstmt('val', OpMxpr('get_proc_compiled_body', [RegMxpr('proc')])),
+            AssignMstmt('val', OpMxpr(
+                'get_proc_compiled_body', [RegMxpr('proc')])),
             GotoMstmt(RegMxpr('val')),
         ], set(['proc']), all_regs)
     elif target != 'val' and linkage.tag == LinkageTag.GOTO:
@@ -441,7 +454,8 @@ def compile_call_proc_apply(target: CompileTarget, linkage: SchemeLinkage):
         label_ret = make_label('call-proc-ret')
         return SchemeCompiledSeq([
             AssignMstmt('continue', ConstMxpr(label_ret)),
-            AssignMstmt('val', OpMxpr('get_proc_compiled_body', [RegMxpr('proc')])),
+            AssignMstmt('val', OpMxpr(
+                'get_proc_compiled_body', [RegMxpr('proc')])),
             GotoMstmt(RegMxpr('val')),
             LabelMstmt(label_ret),
             AssignMstmt(target, RegMxpr('val')),
@@ -458,16 +472,47 @@ def compile_call_proc(paren: Token, label_proc: str, target: CompileTarget, link
     return append_instructions(arity_seq, env_seq, apply_seq)
 
 
-def compile_call_prim():
-    pass
+def compile_call_prim_arity(paren: Token, label_prim: str):
+    check_seq = SchemeCompiledSeq([
+        LabelMstmt(label_prim),
+        AssignMstmt('unev', OpMxpr('ec_check_prim_arity',
+                                   [RegMxpr('proc'), RegMxpr('argl')])),
+    ], set(['proc', 'argl']), set(['unev']))
+    error_seq = compile_error_call('unev', paren)
+    return append_instructions(check_seq, error_seq)
 
 
-def compile_call_invalid():
-    pass
+def compile_call_prim_apply(paren: Token, target: CompileTarget):
+    apply_seq = SchemeCompiledSeq([
+        AssignMstmt('val', OpMxpr(
+            'call_prim', [RegMxpr('proc'), RegMxpr('argl')])),
+        AssignMstmt('unev', OpMxpr('car', [RegMxpr('val')])),
+    ], set(['proc', 'argl']), set(['val', 'unev']))
+    error_seq = compile_error_call('unev', paren)
+    value_seq = SchemeCompiledSeq([
+        AssignMstmt(target, OpMxpr('cdr', [RegMxpr('val')])),
+    ], set(['val']), set([target]))
+    return append_instructions(apply_seq, error_seq, value_seq)
+
+
+def compile_call_prim(paren: Token, label_prim: str, target: CompileTarget, linkage: SchemeLinkage):
+    arity_seq = compile_call_prim_arity(paren, label_prim)
+    apply_seq = compile_call_prim_apply(paren, target)
+    return end_with_linkage(linkage, append_instructions(arity_seq, apply_seq))
+
+
+def compile_call_invalid(paren: Token):
+    '''error must invoke, so no more sequence after error_seq'''
+    check_seq = SchemeCompiledSeq([
+        AssignMstmt('unev', OpMxpr('ec_eval_call_invalid', [RegMxpr('proc')]))
+    ], set(['proc']), set(['unev']))
+    error_seq = compile_error_call('unev', paren)
+    return append_instructions(check_seq, error_seq)
 
 
 def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
-    operator_seq = compile_recursive(expr.operator, 'proc', SchemeLinkage(LinkageTag.NEXT))
+    operator_seq = compile_recursive(
+        expr.operator, 'proc', SchemeLinkage(LinkageTag.NEXT))
     operands_seq = compile_call_operands(expr.operands, compile_recursive)
 
     label_proc = make_label('call-proc-compiled')
@@ -476,16 +521,28 @@ def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage, 
     branch_seq = compile_call_branch(label_proc, label_prim, label_invalid)
 
     label_end = make_label('call-end')
-    branch_linkage = SchemeLinkage(LinkageTag.GOTO, label_end) if linkage.tag == LinkageTag.NEXT else linkage
-    proc_seq = compile_call_proc(expr.paren, label_proc, target, branch_linkage)
-    prim_seq = compile_call_prim()
-    invalid_seq = compile_call_invalid()
+    branch_linkage = SchemeLinkage(
+        LinkageTag.GOTO, label_end) if linkage.tag == LinkageTag.NEXT else linkage
 
-    end_seq = compile_label(label_end)   
+    proc_seq = compile_call_proc(
+        expr.paren, label_proc, target, branch_linkage)
+    prim_seq = compile_call_prim(
+        expr.paren, label_prim, target, branch_linkage)
+    invalid_seq = compile_call_invalid(expr.paren)
+    body_seq = parallel_instructions(proc_seq, prim_seq, invalid_seq)
+
+    end_seq = compile_label(label_end)
+
+    final_seq = preserve_instructions(set(['env']), operator_seq, operands_seq)
+    final_seq = preserve_instructions(set(['proc']), final_seq, branch_seq)
+    final_seq = preserve_instructions(
+        set(['env', 'proc', 'argl', 'continue']), final_seq, body_seq)
+    final_seq = append_instructions(final_seq, end_seq)
+    return final_seq
 
 
 def install_compile_rules():
-    rules={
+    rules = {
         SymbolExpr: compile_symbol,
         StringExpr: compile_string,
         NumberExpr: compile_number,
@@ -501,7 +558,7 @@ def install_compile_rules():
 
 
 def install_operations_compile():
-    ops={
+    ops = {
         'pure_eval_string': pure_eval_string,
         'pure_eval_number': pure_eval_number,
         'pure_eval_boolean': pure_eval_boolean,
@@ -516,22 +573,30 @@ def install_operations_compile():
         'ec_env_extend': ec_env_extend,
         'init_val_list': init_val_list,
         'append_val_list': append_val_list,
+        'get_call_parameters': get_call_parameters,
+        'get_call_arguments': get_call_arguments,
+        'ec_check_prim_arity': ec_check_prim_arity,
+        'ec_check_proc_arity': ec_check_proc_arity,
+        'ec_eval_call_invalid': ec_eval_call_invalid,
 
         'make_proc_compiled': make_proc_compiled,
         'get_proc_compiled_body': get_proc_compiled_body,
     }
     update_operations(ops)
 
+
 def install_assemble_mxpr_compile_rules():
-    rules={ProcMxpr: assemble_mxpr_proc}
+    rules = {ProcMxpr: assemble_mxpr_proc}
     update_assemble_mxpr_rules(rules)
 
+
 def install_stringify_mxpr_compile_rules():
-    rules={ProcMxpr: stringify_mxpr_proc}
+    rules = {ProcMxpr: stringify_mxpr_proc}
     update_stringify_mxpr_rules(rules)
 
+
 def install_stringify_value_compile_rules():
-    rules={ProcStaticVal: stringify_value_procedure_static}
+    rules = {ProcStaticVal: stringify_value_procedure_static}
     update_stringify_value_rules(rules)
 
 
@@ -539,56 +604,59 @@ def install_stringify_value_compile_rules():
 no need for expr and dist
 other regs are still necessary
 '''
-compile_regs={
+compile_regs = {
     'val': None,
     'env': None,
     'unev': None,
     'unev2': None,
     'unev3': None,
-    'err': None
+    'err': None,
+    'proc': None,
+    'argl': None,
+    'continue': None
 }
 
 
 def test_one(source: str, **kargs: str):
     # source
-    source=source.strip()
+    source = source.strip()
     print('* source: %s' % source)
 
     try:
         try:
             # scan
-            tokens=scan_source(source)
+            tokens = scan_source(source)
 
             # parse
-            combos=parse_tokens(tokens)
-            expr=parse_expr(combos)
+            combos = parse_tokens(tokens)
+            expr = parse_expr(combos)
 
             # resolve
-            distances=resolve_expr(expr)
+            distances = resolve_expr(expr)
 
             # compile
-            code=compile_expr(expr, distances).code
+            code = compile_expr(expr, distances).code
             print('compiled code:')
             print_code_list(code)
 
             # build machine
-            ops=get_operations()
-            glbenv=make_global_env()
-            machine=make_machine(compile_regs, ops, code)
+            ops = get_operations()
+            glbenv = make_global_env()
+            machine = make_machine(compile_regs, ops, code)
             machine.state.regs.update({'env': glbenv})
-            execute_machine=make_run_machine(lambda _: False)
+            execute_machine = make_run_machine(lambda _: False)
 
             # trace
-            tstate=TraceState()
+            tstate = TraceState()
             trace_machine(machine.instructions, machine.state,
                           stringify_inst_data, tstate)
 
             # result
             init_machine_pc(machine)
             execute_machine(machine)
-            result=machine.state.regs['val']
-            result_str=stringify_value(result)
-            output_str=scheme_flush()
+            result = machine.state.regs['val']
+            result_str = stringify_value(result)
+            output_str = scheme_flush()
             if len(output_str):
                 print('* output: %s' % output_str)
             if 'output' in kargs:
@@ -610,40 +678,40 @@ def test_one(source: str, **kargs: str):
 
 def test_one_recursion(source_tmpl: str, name: str, nrng: Tuple[int, int], get_val: Callable[[int], int]):
     print('%s (%d, %d)' % (name, nrng[0], nrng[1]))
-    source_tmpl=source_tmpl.strip()
+    source_tmpl = source_tmpl.strip()
     print(source_tmpl)
     for nval in range(*nrng):
         # source
-        source=source_tmpl % nval
+        source = source_tmpl % nval
 
         try:
             # scan
-            tokens=scan_source(source)
+            tokens = scan_source(source)
 
             # parse
-            combos=parse_tokens(tokens)
-            expr=parse_expr(combos)
+            combos = parse_tokens(tokens)
+            expr = parse_expr(combos)
 
             # resolve
-            distances=resolve_expr(expr)
+            distances = resolve_expr(expr)
 
             # compile
-            code=compile_expr(expr, distances).code
+            code = compile_expr(expr, distances).code
 
             # build machine
-            ops=get_operations()
-            glbenv=make_global_env()
-            machine=make_machine(compile_regs, ops, code)
-            statistics=MachineStatistic()
+            ops = get_operations()
+            glbenv = make_global_env()
+            machine = make_machine(compile_regs, ops, code)
+            statistics = MachineStatistic()
             monitor_statistics(machine.instructions, machine.state, statistics)
             machine.state.regs.update({'env': glbenv})
-            execute_machine=make_run_machine(lambda _: False)
+            execute_machine = make_run_machine(lambda _: False)
 
             # result
             init_machine_pc(machine)
             execute_machine(machine)
-            res=machine.state.regs['val']
-            res_str=stringify_value(res)
+            res = machine.state.regs['val']
+            res_str = stringify_value(res)
             assert res_str == str(get_val(nval))
 
             print('n = %d, val = %s, total_insts = %d, stack_ops = %d, stack_depth = %d' %
@@ -777,7 +845,7 @@ def test_resolve():
 
 
 def factorial(n: int):
-    product=1
+    product = 1
     for i in range(1, n+1):
         product *= i
     return product
