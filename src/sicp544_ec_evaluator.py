@@ -806,11 +806,13 @@ def test_one_recursion(source_tmpl: str, name: str, nrng: Tuple[int, int], get_v
             ops = get_operations()
             glbenv = make_global_env()
             machine = make_machine(ec_eval_regs, ops, ec_eval_code_list)
-            statistics = MachineStatistic()
-            monitor_statistics(machine.instructions, machine.state, statistics)
             machine.state.regs.update(
                 {'expr': expr, 'env': glbenv, 'dist': distances})
             execute_machine = make_run_machine(lambda _: False)
+
+            # statistics
+            statistics = MachineStatistic()
+            monitor_statistics(machine.instructions, machine.state, statistics)
 
             # result
             init_machine_pc(machine)

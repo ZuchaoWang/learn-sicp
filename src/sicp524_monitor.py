@@ -5,10 +5,12 @@ original exec is wrapped in a new function which add functionalities to original
 the strategy to support breakpoint is to provide should_break function
 '''
 
-from typing import Any, Callable, Dict, List, Set, Tuple, Type, TypeVar, cast
+from typing import Any, Callable, Dict, List, Set, Tuple, Type, TypeVar, Union, cast
 from sicp414_evaluator import NumberVal, install_stringify_value_rules, stringify_value
-from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GenericMstmt, GenericMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, Mxpr, OpMxpr, PerformMstmt, RegInst, RegInstPtr, RegMachine, RegMachineCase, RegMachineState, RegMxpr, RestoreMstmt, SaveMstmt, ShouldBreakFuncType, TestMstmt, \
-    get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, \
+from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GenericMstmt, GenericMxpr, GotoMstmt, LabelMstmt, \
+    LabelMxpr, Mstmt, Mxpr, OpMxpr, PerformMstmt, RegInst, RegInstPtr, RegMachine, RegMachineCase, RegMachineState, \
+    RegMxpr, RestoreMstmt, SaveMstmt, ShouldBreakFuncType, TestMstmt, get_operations, init_machine_pc, \
+    install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, \
     case_factorial_iter, case_factorial_recur, case_fib_double_recur, make_run_machine, run_machine, step_machine
 
 '''recording statistics of stack and instructions'''
@@ -205,12 +207,13 @@ def trace_stringify(state: RegMachineState, stringify_inst_data: StringifyInstDa
     for reg_name in state.regs:
         if reg_name != 'pc' and state.regs[reg_name] is not None:
             outputs.append('  %s = %s' %
-                  (reg_name, stringify_inst_data(state.regs[reg_name])))
+                           (reg_name, stringify_inst_data(state.regs[reg_name])))
+    outputs.append('  stack = %s' % stringify_inst_data(state.stack))
     pc: RegInstPtr = state.regs['pc']
     if pc.index < len(pc.insts):
         inst = pc.insts[pc.index]
         outputs.append('@ pc = %d # %d: %s' %
-              (pc.index, id(pc.insts), stringify_mstmt(inst.code, stringify_inst_data)))
+                       (pc.index, id(pc.insts), stringify_mstmt(inst.code, stringify_inst_data)))
     else:
         outputs.append('@ pc = %d # %d: <end>' % (pc.index, id(pc.insts)))
     return outputs
@@ -228,6 +231,7 @@ def reset_trace(ts: TraceState):
 def trace_machine(instructions: List[RegInst], state: RegMachineState, stringify_inst_data: StringifyInstDataFuncType, ts: TraceState):
     def _trace_one(inst: RegInst):
         prev_exec = inst.exec
+
         def _exec():
             ts.outputs.extend(trace_stringify(state, stringify_inst_data))
             prev_exec()
@@ -237,13 +241,23 @@ def trace_machine(instructions: List[RegInst], state: RegMachineState, stringify
         _trace_one(inst)
 
 
+def stringify_value_list(data: Any):
+    if isinstance(data, list):
+        return '[%s]' % (', '.join([stringify_value_list(d) for d in data]))
+    elif isinstance(data, RegInstPtr):
+        return '<ptr=%d>' % data.index
+    else:
+        return stringify_value(data)
+
+
 def test_trace():
-    case = case_factorial_iter
+    case = case_factorial_recur
     print('trace: %s' % case['name'])
     ops = get_operations()
     machine = make_machine(case['regs'], ops, case['code'])
     tstate = TraceState()
-    trace_machine(machine.instructions, machine.state, stringify_value, tstate)
+    trace_machine(machine.instructions, machine.state,
+                  stringify_value_list, tstate)
     init_machine_pc(machine)
     execute_machine = make_run_machine(lambda _: False)
     execute_machine(machine)

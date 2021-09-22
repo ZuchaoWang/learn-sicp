@@ -1,10 +1,23 @@
 import enum
 from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, cast
-from sicp414_evaluator import BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, GenericExpr, IfExpr, LambdaExpr, NilExpr, NumberExpr, NumberVal, ProcVal, QuoteExpr, SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, stringify_token_full, stringify_value, update_stringify_value_rules
+from sicp414_evaluator import AndExpr, BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, \
+    GenericExpr, IfExpr, LambdaExpr, NilExpr, NotExpr, NumberExpr, NumberVal, OrExpr, ProcVal, QuoteExpr, \
+    SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, \
+    install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, \
+    install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, \
+    pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, \
+    stringify_token_full, stringify_value, update_stringify_value_rules
 from sicp416_resolver import ResDistancesType, install_resolver_rules, resolve_expr
-from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, Mxpr, OpMxpr, PerformMstmt, RegInstPtr, RegMachineState, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, make_run_machine, update_assemble_mxpr_rules, update_operations
-from sicp544_ec_evaluator import append_val_list, boolean_true, call_prim, concat_token_message, ec_check_prim_arity, ec_check_proc_arity, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, ec_eval_call_invalid, get_call_arguments, get_call_parameters, get_proc_env, get_val_type, goto_panic, init_val_list, print_code_list, stringify_inst_data
-from sicp524_monitor import MachineStatistic, StringifyInstDataFuncType, TraceState, monitor_statistics, install_stringify_mstmt_rules, install_stringify_mxpr_rules, trace_machine, update_stringify_mxpr_rules
+from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, Mxpr, \
+    OpMxpr, PerformMstmt, RegInstPtr, RegMachineState, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, \
+    get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, \
+    install_operations, make_machine, make_run_machine, update_assemble_mxpr_rules, update_operations
+from sicp544_ec_evaluator import append_val_list, boolean_not, boolean_true, call_prim, concat_token_message, \
+    ec_check_prim_arity, ec_check_proc_arity, ec_env_define, ec_env_extend, ec_env_lookup_at, ec_env_set_at, \
+    ec_eval_call_invalid, get_call_arguments, get_call_parameters, get_proc_env, get_val_type, goto_panic, \
+    init_val_list, print_code_list, stringify_inst_data
+from sicp524_monitor import MachineStatistic, StringifyInstDataFuncType, TraceState, monitor_statistics, \
+    install_stringify_mstmt_rules, install_stringify_mxpr_rules, trace_machine, update_stringify_mxpr_rules
 
 
 class SchemeCompiledSeq:
@@ -42,6 +55,10 @@ def preserve_two_instructions(regs: Set[str], seq1: SchemeCompiledSeq, seq2: Sch
 
 
 def preserve_instructions(regs: Set[str], *seq_list: SchemeCompiledSeq):
+    '''
+    preserve should not wrap conditional instructions with different gotos such as if-then-else (unless goto error)
+    otherwise restore might be skipped, making save/restore unpaired
+    '''
     seq_cur = SchemeCompiledSeq([], set(), set())
     for i in range(len(seq_list)):
         seq_cur = preserve_two_instructions(regs, seq_cur, seq_list[i])
@@ -194,7 +211,8 @@ def compile_expr_no_lib(expr: GenericExpr, target: CompileTarget, linkage: Schem
     return res
 
 
-def compile_symbol(expr: SymbolExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+def compile_symbol(expr: SymbolExpr, target: CompileTarget, linkage: SchemeLinkage,
+                   compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     dist = NumberVal(distances[expr])
     name_val = StringVal(expr.name.literal)
     token = expr.name
@@ -210,7 +228,8 @@ def compile_symbol(expr: SymbolExpr, target: CompileTarget, linkage: SchemeLinka
     return end_with_linkage(linkage, append_instructions(env_seq, error_seq, ret_seq))
 
 
-def compile_set(expr: SetExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+def compile_set(expr: SetExpr, target: CompileTarget, linkage: SchemeLinkage,
+                compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     dist = NumberVal(distances[expr])
     name_val = StringVal(expr.name.literal)
     token = expr.name
@@ -237,34 +256,41 @@ def compile_define_any(name: Token, source: str, target: CompileTarget):
     return append_instructions(env_seq, ret_seq)
 
 
-def compile_define_var(expr: DefineVarExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+def compile_define_var(expr: DefineVarExpr, target: CompileTarget, linkage: SchemeLinkage,
+                       compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     init_seq = compile_recursive(
         expr.initializer, 'val', SchemeLinkage(LinkageTag.NEXT))
     def_seq = compile_define_any(expr.name, 'val', target)
     return end_with_linkage(linkage, append_instructions(init_seq, def_seq))
 
 
-def compile_string(expr: StringExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+def compile_string(expr: StringExpr, target: CompileTarget, linkage: SchemeLinkage,
+                   compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     return compile_const(pure_eval_string(expr), target, linkage)
 
 
-def compile_number(expr: NumberExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+def compile_number(expr: NumberExpr, target: CompileTarget, linkage: SchemeLinkage,
+                   compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     return compile_const(pure_eval_number(expr), target, linkage)
 
 
-def compile_boolean(expr: BooleanExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+def compile_boolean(expr: BooleanExpr, target: CompileTarget, linkage: SchemeLinkage,
+                    compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     return compile_const(pure_eval_boolean(expr), target, linkage)
 
 
-def compile_nil(expr: NilExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+def compile_nil(expr: NilExpr, target: CompileTarget, linkage: SchemeLinkage,
+                compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     return compile_const(pure_eval_nil(), target, linkage)
 
 
-def compile_quote(expr: QuoteExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+def compile_quote(expr: QuoteExpr, target: CompileTarget, linkage: SchemeLinkage,
+                  compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     return compile_const(pure_eval_quote(expr), target, linkage)
 
 
-def compile_sequence(expr: SequenceExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+def compile_sequence(expr: SequenceExpr, target: CompileTarget, linkage: SchemeLinkage,
+                     compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     '''
     all contents use the same target, all use next linkage except the last use input linkage
     the last content already fire the linkage, so no need to call end_with_linkage; otherwise may return twice
@@ -523,7 +549,8 @@ def compile_call_invalid(paren: Token, label_invalid: str):
     return append_instructions(label_seq, check_seq, error_seq)
 
 
-def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage,
+                 compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     operator_seq = compile_recursive(
         expr.operator, 'proc', SchemeLinkage(LinkageTag.NEXT))
     operands_seq = compile_call_operands(expr.operands, compile_recursive)
@@ -556,13 +583,15 @@ def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage, 
     return final_seq
 
 
-def compile_lambda(expr: LambdaExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+def compile_lambda(expr: LambdaExpr, target: CompileTarget, linkage: SchemeLinkage,
+                   compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     proc_value_seq = compile_define_proc_value(
         'lambda', expr.pos_paras, expr.rest_para, expr.body, target, compile_recursive)
     return end_with_linkage(linkage, proc_value_seq)
 
 
-def compile_if(expr: IfExpr, target: CompileTarget, linkage: SchemeLinkage, compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+def compile_if(expr: IfExpr, target: CompileTarget, linkage: SchemeLinkage,
+               compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     label_then = make_label('if-then')
     label_end = make_label('if-end')
 
@@ -572,7 +601,8 @@ def compile_if(expr: IfExpr, target: CompileTarget, linkage: SchemeLinkage, comp
         TestMstmt(OpMxpr('true?', [RegMxpr('val')])),
         BranchMstmt(LabelMxpr(label_then)),
     ], set(['val']), set())
-    front_seq = append_instructions(pred_seq, branch_seq)
+    front_seq = preserve_instructions(
+        set(['env', 'continue']), pred_seq, branch_seq)
 
     lkg_else = SchemeLinkage(
         LinkageTag.GOTO, label_end) if linkage.tag == LinkageTag.NEXT else linkage
@@ -590,7 +620,63 @@ def compile_if(expr: IfExpr, target: CompileTarget, linkage: SchemeLinkage, comp
 
     tail_seq = parallel_instructions(else_seq, then_seq)
 
-    return preserve_instructions(set(['env', 'continue']), front_seq, tail_seq)
+    return append_instructions(front_seq, tail_seq)
+
+
+def compile_and(expr: AndExpr, target: CompileTarget, linkage: SchemeLinkage,
+                compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+    label_end = make_label('and-end')
+    lkg_next = SchemeLinkage(LinkageTag.NEXT)
+    content_sub_seqs = []
+    for content in expr.contents:
+        eval_seq = compile_recursive(content, target, lkg_next)
+        branch_seq = SchemeCompiledSeq([
+            TestMstmt(OpMxpr('boolean_not', [RegMxpr(target)])),
+            BranchMstmt(LabelMxpr(label_end)),
+        ], set(), set())
+        content_sub_seq = append_instructions(eval_seq, branch_seq)
+        content_sub_seqs.append(content_sub_seq)
+    content_seq = preserve_instructions(
+        set(['env', 'continue']), *content_sub_seqs)
+
+    label_seq = compile_label(label_end)
+    final_seq = append_instructions(content_seq, label_seq)
+    final_seq = end_with_linkage(linkage, final_seq)
+    return final_seq
+
+
+def compile_or(expr: OrExpr, target: CompileTarget, linkage: SchemeLinkage,
+               compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+    label_end = make_label('or-end')
+    lkg_next = SchemeLinkage(LinkageTag.NEXT)
+    content_sub_seqs = []
+    for content in expr.contents:
+        eval_seq = compile_recursive(content, target, lkg_next)
+        branch_seq = SchemeCompiledSeq([
+            TestMstmt(OpMxpr('true?', [RegMxpr(target)])),
+            BranchMstmt(LabelMxpr(label_end)),
+        ], set(), set())
+        content_sub_seq = append_instructions(eval_seq, branch_seq)
+        content_sub_seqs.append(content_sub_seq)
+    content_seq = preserve_instructions(
+        set(['env', 'continue']), *content_sub_seqs)
+
+    label_seq = compile_label(label_end)
+    final_seq = append_instructions(content_seq, label_seq)
+    final_seq = end_with_linkage(linkage, final_seq)
+    return final_seq
+
+
+def compile_not(expr: NotExpr, target: CompileTarget, linkage: SchemeLinkage,
+                compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+    lkg_next = SchemeLinkage(LinkageTag.NEXT)
+    eval_seq = compile_recursive(expr.content, target, lkg_next)
+    inv_seq = SchemeCompiledSeq([
+        AssignMstmt(target, OpMxpr('boolean_not', [RegMxpr(target)])),
+    ], set([target]), set([target]))
+    final_seq = append_instructions(eval_seq, inv_seq)
+    final_seq = end_with_linkage(linkage, final_seq)
+    return final_seq
 
 
 def install_compile_rules():
@@ -607,7 +693,10 @@ def install_compile_rules():
         SequenceExpr: compile_sequence,
         CallExpr: compile_call,
         LambdaExpr: compile_lambda,
-        IfExpr: compile_if
+        IfExpr: compile_if,
+        AndExpr: compile_and,
+        OrExpr: compile_or,
+        NotExpr: compile_not
     }
     update_compile_rules(rules)
 
@@ -636,6 +725,7 @@ def install_operations_compile():
         'ec_check_proc_arity': ec_check_proc_arity,
         'ec_eval_call_invalid': ec_eval_call_invalid,
         'call_prim': call_prim,
+        'boolean_not': boolean_not,
         'true?': boolean_true,
 
         'make_proc_compiled': make_proc_compiled,
@@ -743,6 +833,7 @@ def test_one_recursion(source_tmpl: str, name: str, nrng: Tuple[int, int], get_v
         # source
         source = source_tmpl % nval
 
+        # try:
         try:
             # scan
             tokens = scan_source(source)
@@ -756,15 +847,24 @@ def test_one_recursion(source_tmpl: str, name: str, nrng: Tuple[int, int], get_v
 
             # compile
             code = compile_expr(expr, distances).code
+            # print('compiled code:')
+            # print_code_list(code)
 
             # build machine
             ops = get_operations()
             glbenv = make_global_env()
             machine = make_machine(compile_regs, ops, code)
-            statistics = MachineStatistic()
-            monitor_statistics(machine.instructions, machine.state, statistics)
             machine.state.regs.update({'env': glbenv})
             execute_machine = make_run_machine(lambda _: False)
+
+            # statistics
+            statistics = MachineStatistic()
+            monitor_statistics(machine.instructions, machine.state, statistics)
+
+            # trace
+            # tstate = TraceState()
+            # trace_machine(machine.instructions, machine.state,
+            #               stringify_inst_data, tstate)
 
             # result
             init_machine_pc(machine)
@@ -780,6 +880,10 @@ def test_one_recursion(source_tmpl: str, name: str, nrng: Tuple[int, int], get_v
             # any kind of panic
             print('* panic: %s' % err.message)
             assert False
+        # except Exception as err:
+        #     # print current instruction and regs
+        #     print('\n'.join(tstate.outputs[-100:]))
+            raise err
     print('----------')
 
 
@@ -835,7 +939,6 @@ def test_expr():
         '(if #t (if 3 4) 2)',
         result='4',
     )
-    return
     test_one(
         '(and (+ 1 2) (or (not #t) (list 3 4)))',
         result='(3 4)',
@@ -964,8 +1067,8 @@ def install_rules():
 def test():
     test_error()
     test_expr()
-    # test_resolve()
-    # test_recursion()
+    test_resolve()
+    test_recursion()
 
 
 if __name__ == '__main__':

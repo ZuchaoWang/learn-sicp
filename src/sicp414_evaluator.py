@@ -1296,12 +1296,12 @@ def stringify_value_pair(sv: PairVal):
 
 @stringify_value_rule_decorator
 def stringify_value_procedure(sv: ProcVal):
-    return '[procedure %s]' % sv.name
+    return '<procedure %s>' % sv.name
 
 
 @stringify_value_rule_decorator
 def stringify_value_primitive(sv: PrimVal):
-    return '[primitive %s]' % sv.name
+    return '<primitive %s>' % sv.name
 
 
 def install_stringify_value_rules():
@@ -2191,7 +2191,7 @@ def test_eval():
         '''
         (lambda () 1)
         ''',
-        result='[procedure lambda]'
+        result='<procedure lambda>'
     )
     # scope conflict
     # should error when we have resolver
