@@ -11,16 +11,30 @@ for evaluator to call compiled procedure
 just goto ProcCompiledVal.body
 
 for compiled code to call evaluated procedure
-just goto proc_plain_entry, which is a special register holding label('ev-call-proc-plain')
+just goto proc_plain_entry, which is a special register holding evaluator's label('ev-call-proc-plain')
 '''
 
 from typing import Any, List, Literal, TypedDict
-from sicp414_evaluator import CallExpr, SchemePanic, StringVal, Token, UndefVal, install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, make_global_env, scheme_flush, stringify_value
+from sicp414_evaluator import CallExpr, SchemePanic, StringVal, Token, UndefVal, install_is_equal_rules, \
+    install_parse_expr_rules, install_primitives, install_stringify_expr_rules, install_stringify_value_rules, \
+    make_global_env, scheme_flush, stringify_value
 from sicp416_resolver import ResDistancesType, install_resolver_rules
-from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, OpMxpr, RegMachine, RegMachineState, RegMxpr, TestMstmt, assemble, get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_machine, make_reg_table, make_run_machine
-from sicp524_monitor import install_stringify_mstmt_rules, install_stringify_mxpr_rules
-from sicp544_ec_evaluator import ec_eval_code_list, install_operations_ec, prepare_source, print_code_list, stringify_inst_data
-from sicp554_compiler import CompileRecurFuncType, CompileTarget, LinkageTag, SchemeCompiledSeq, SchemeLinkage, append_instructions, compile_call_branch, compile_call_invalid, compile_call_operands, compile_call_prim, compile_call_proc_any, compile_call_proc_compiled, compile_expr, compile_label, install_assemble_mxpr_compile_rules, install_compile_rules, install_operations_compile, install_stringify_mxpr_compile_rules, install_stringify_value_compile_rules, make_label, parallel_instructions, preserve_instructions, update_compile_rules
+from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, \
+    OpMxpr, RegMachine, RegMachineState, RegMxpr, TestMstmt, assemble, get_operations, init_machine_pc, \
+    install_assemble_mstmt_rules, install_assemble_mxpr_rules, install_operations, make_reg_table, \
+    make_run_machine
+from sicp524_monitor import TraceState, install_stringify_mstmt_rules, install_stringify_mxpr_rules, \
+    trace_machine
+from sicp544_ec_evaluator import ec_eval_code_list, install_operations_ec, prepare_source, print_code_list, \
+    stringify_inst_data
+from sicp554_compiler import CompileRecurFuncType, CompileTarget, LinkageTag, SchemeCompiledSeq, \
+    SchemeLinkage, append_instructions, compile_call_invalid, compile_call_operands, compile_call_prim, \
+    compile_call_proc_any, compile_call_proc_compiled, compile_expr, compile_label, \
+    install_assemble_mxpr_compile_rules, install_compile_rules, install_operations_compile, \
+    install_stringify_mxpr_compile_rules, install_stringify_value_compile_rules, make_label, \
+    parallel_instructions, preserve_instructions, update_compile_rules
+
+'''modify evaluator machine, insert code to handle ProcCompiledVal'''
 
 # fmt: off
 call_compiled_bt_code_list: List[Mstmt] = [
@@ -61,6 +75,9 @@ mixed_ec_eval_code_list = ec_eval_code_list[0:insertion_index_bt] + \
     call_compiled_app_code_list + ec_eval_code_list[insertion_index_app:]
 
 
+'''modify compiler, insert code to handle ProcPlainVal'''
+
+
 def compile_call_proc_plain(paren: Token, label_proc: str, target: CompileTarget, linkage: SchemeLinkage):
     all_regs = set(['val', 'unev', 'unev2', 'unev3',
                     'proc', 'argl', 'continue', 'env', 'expr'])
@@ -87,17 +104,18 @@ def compile_call_branch_mix(label_proc_compiled: str, label_proc_plain: str, lab
 
 
 def compile_call_mix(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage,
-                 compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
+                     compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     '''add ProcPlainVal support to original compile_call'''
     operator_seq = compile_recursive(
         expr.operator, 'proc', SchemeLinkage(LinkageTag.NEXT))
     operands_seq = compile_call_operands(expr.operands, compile_recursive)
 
     label_proc_compiled = make_label('call-proc-compiled')
-    label_proc_plain = make_label('call-proc-plain') # added
+    label_proc_plain = make_label('call-proc-plain')  # added
     label_prim = make_label('call-prim')
     label_invalid = make_label('call-invalid')
-    branch_seq = compile_call_branch_mix(label_proc_compiled, label_proc_plain, label_prim, label_invalid) # changed
+    branch_seq = compile_call_branch_mix(
+        label_proc_compiled, label_proc_plain, label_prim, label_invalid)  # changed
 
     label_end = make_label('call-end')
     branch_linkage = SchemeLinkage(
@@ -106,11 +124,12 @@ def compile_call_mix(expr: CallExpr, target: CompileTarget, linkage: SchemeLinka
     proc_compiled_seq = compile_call_proc_compiled(
         expr.paren, label_proc_compiled, target, branch_linkage)
     proc_plain_seq = compile_call_proc_plain(
-        expr.paren, label_proc_plain, target, branch_linkage) # added
+        expr.paren, label_proc_plain, target, branch_linkage)  # added
     prim_seq = compile_call_prim(
         expr.paren, label_prim, target, branch_linkage)
     invalid_seq = compile_call_invalid(expr.paren, label_invalid)
-    body_seq = parallel_instructions(proc_compiled_seq, proc_plain_seq, prim_seq, invalid_seq) # changed
+    body_seq = parallel_instructions(
+        proc_compiled_seq, proc_plain_seq, prim_seq, invalid_seq)  # changed
 
     end_seq = compile_label(label_end)
 
@@ -131,6 +150,9 @@ def install_compile_mix_rules():
     update_compile_rules(rules)
 
 
+'''registers add proc_plain_entry'''
+
+
 mixed_regs = {
     'val': None,
     'expr': None,
@@ -147,61 +169,95 @@ mixed_regs = {
 }
 
 
+'''test to run evaluated and compiled code interleaved'''
+
+
 class MixedSource(TypedDict):
     tag: Literal['eval', 'compiled']
     code: str
 
+
 def test_one(source_list: List[MixedSource], **kargs: str):
-    try:     
-        # shared   
-        ops = get_operations()
-        glbenv = make_global_env()
-        stack: List[Any] = []
-        regs = make_reg_table(mixed_regs)
-        state = RegMachineState(stack, regs, ops)
-        execute_machine = make_run_machine(lambda _: False)
-        symbol_table_eval, instructions_eval = assemble(mixed_ec_eval_code_list, state)
-        machine_eval = RegMachine(state, symbol_table_eval, instructions_eval)
-        proc_plain_entry = symbol_table_eval['ev-call-proc-plain']
+    try:
+        try:
+            # shared
+            ops = get_operations()
+            stack: List[Any] = []
+            regs = make_reg_table(mixed_regs)
+            state = RegMachineState(stack, regs, ops)
+            execute_machine = make_run_machine(lambda _: False)
 
-        for source_obj in source_list:
-            if source_obj['tag'] == 'eval':
-                source_eval = source_obj['code'].strip()
-                print('* source_eval: %s' % source_eval)
-                expr_eval, distances_eval = prepare_source(source_eval)
-                accu_dist = state.regs['dist']
-                accu_dist = {} if accu_dist is None else accu_dist
-                accu_dist.update(distances_eval)
-                state.regs.update({'env': glbenv, 'expr': expr_eval, 'dist': accu_dist})
-                init_machine_pc(machine_eval)
-                execute_machine(machine_eval)
-            else:
-                source_compiled = source_obj['code'].strip()
-                print('* source_compiled: %s' % source_compiled)
-                expr_compiled, distances_compiled = prepare_source(source_compiled)
-                state.regs.update({'env': glbenv, 'proc_plain_entry': proc_plain_entry})
-                code_compiled = compile_expr(expr_compiled, distances_compiled).code
-                symbol_table_compiled, instructions_compiled = assemble(code_compiled, state)
-                machine_compiled = RegMachine(state, symbol_table_compiled, instructions_compiled)
-                init_machine_pc(machine_compiled)
-                execute_machine(machine_compiled)
+            # evaluator machine can be built directly from mixed_ec_eval_code_list
+            # program is just data for this machine
+            symbol_table_eval, instructions_eval = assemble(
+                mixed_ec_eval_code_list, state)
+            machine_eval = RegMachine(
+                state, symbol_table_eval, instructions_eval)
 
-        result = machine_eval.state.regs['val']
-        result_str = stringify_value(result)
-        output_str = scheme_flush()
+            # put glbenv in env register
+            # this is one key for sharing (another sharing is state)
+            glbenv = make_global_env()
+            state.regs.update({'env': glbenv})
 
-        if len(output_str):
-            print('* output: %s' % output_str)
-        if 'output' in kargs:
-            assert output_str == kargs['output']
-        print('* result: %s' % result_str)
-        if 'result' in kargs:
-            assert result_str == kargs['result']
+            # put label('ev-call-proc-plain') in proc_plain_entry register
+            # this is the key to call evaluated proc in compiler
+            proc_plain_entry = symbol_table_eval['ev-call-proc-plain']
+            state.regs.update({'proc_plain_entry': proc_plain_entry})
 
-    except SchemePanic as err:
-        # any kind of panic
-        print('* panic: %s' % err.message)
-        assert err.message == kargs['panic']
+            # trace, used for debugging
+            tstate = TraceState()
+            trace_machine(instructions_eval, state,
+                          stringify_inst_data, tstate)
+
+            for source_obj in source_list:
+                if source_obj['tag'] == 'eval':
+                    source_eval = source_obj['code'].strip()
+                    print('* source_eval: %s' % source_eval)
+                    expr_eval, distances_eval = prepare_source(source_eval)
+                    accu_dist = state.regs['dist']
+                    accu_dist = {} if accu_dist is None else accu_dist
+                    accu_dist.update(distances_eval)
+                    state.regs.update({'expr': expr_eval, 'dist': accu_dist})
+                    init_machine_pc(machine_eval)
+                    execute_machine(machine_eval)
+                else:
+                    source_compiled = source_obj['code'].strip()
+                    print('* source_compiled: %s' % source_compiled)
+                    expr_compiled, distances_compiled = prepare_source(
+                        source_compiled)
+                    code_compiled = compile_expr(
+                        expr_compiled, distances_compiled).code
+                    print('* code_compiled:')
+                    print_code_list(code_compiled)
+                    symbol_table_compiled, instructions_compiled = assemble(
+                        code_compiled, state)
+                    machine_compiled = RegMachine(
+                        state, symbol_table_compiled, instructions_compiled)
+                    trace_machine(instructions_compiled, state,
+                                  stringify_inst_data, tstate)
+                    init_machine_pc(machine_compiled)
+                    execute_machine(machine_compiled)
+
+            result = machine_eval.state.regs['val']
+            result_str = stringify_value(result)
+            output_str = scheme_flush()
+
+            if len(output_str):
+                print('* output: %s' % output_str)
+            if 'output' in kargs:
+                assert output_str == kargs['output']
+            print('* result: %s' % result_str)
+            if 'result' in kargs:
+                assert result_str == kargs['result']
+
+        except SchemePanic as err:
+            # any kind of panic
+            print('* panic: %s' % err.message)
+            assert err.message == kargs['panic']
+    except Exception as err:
+        # print current instruction and regs
+        print('\n'.join(tstate.outputs[-200:]))
+        raise err
     print('----------')
 
 
@@ -213,7 +269,7 @@ def test_eval_call_compiled():
         'tag': 'eval',
         'code': 'x'
     }],
-      result='1'
+        result='1'
     )
     test_one([{
         'tag': 'compiled',
@@ -226,7 +282,7 @@ def test_eval_call_compiled():
         'tag': 'eval',
         'code': '(f x (f y 3))'
     }],
-      result='6'
+        result='6'
     )
     test_one([{
         'tag': 'compiled',
@@ -240,7 +296,7 @@ def test_eval_call_compiled():
         'tag': 'eval',
         'code': '(factorial 5)'
     }],
-      result='120'
+        result='120'
     )
 
 
@@ -252,7 +308,7 @@ def test_compiled_call_eval():
         'tag': 'compiled',
         'code': 'x'
     }],
-      result='1'
+        result='1'
     )
     test_one([{
         'tag': 'eval',
@@ -265,7 +321,7 @@ def test_compiled_call_eval():
         'tag': 'compiled',
         'code': '(f x (f y 3))'
     }],
-      result='6'
+        result='6'
     )
     test_one([{
         'tag': 'eval',
@@ -279,11 +335,12 @@ def test_compiled_call_eval():
         'tag': 'compiled',
         'code': '(factorial 5)'
     }],
-      result='120'
+        result='120'
     )
-          
+
 
 def test_mix():
+    '''double recursion, with one proc defined in evaluator, another in compiler'''
     test_one([{
         'tag': 'eval',
         'code': '(define (even n) (if (= n 0) #t (odd (- n 1))))'
@@ -300,7 +357,7 @@ def test_mix():
           (and x y)
         '''
     }, ],
-      result='#t'
+        result='#t'
     )
 
 

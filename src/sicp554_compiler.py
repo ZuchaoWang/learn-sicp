@@ -31,15 +31,14 @@ in that case not only do we have to support strange const data type in ops, but 
 '''
 
 import enum
-from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, Union, cast
+from typing import Callable, Dict, List, Literal, Optional, Tuple, Type, Set, cast
 from sicp414_evaluator import AndExpr, BooleanExpr, CallExpr, DefineProcExpr, DefineVarExpr, Environment, Expression, \
     GenericExpr, IfExpr, LambdaExpr, NilExpr, NotExpr, NumberExpr, NumberVal, OrExpr, ProcVal, QuoteExpr, \
     SchemePanic, SchemeVal, SequenceExpr, SetExpr, StringExpr, StringVal, SymbolExpr, SymbolVal, Token, UndefVal, \
     install_is_equal_rules, install_parse_expr_rules, install_primitives, install_stringify_expr_rules, \
-    install_stringify_value_rules, make_global_env, parse_expr, parse_tokens, pure_eval_boolean, \
-    pure_eval_nil, pure_eval_number, pure_eval_quote, pure_eval_string, scan_source, scheme_flush, scheme_panic, \
-    stringify_token_full, stringify_value, update_stringify_value_rules
-from sicp416_resolver import ResDistancesType, install_resolver_rules, resolve_expr
+    install_stringify_value_rules, make_global_env, pure_eval_boolean, pure_eval_nil, pure_eval_number, pure_eval_quote, \
+    pure_eval_string, scheme_flush, scheme_panic, stringify_token_full, stringify_value, update_stringify_value_rules
+from sicp416_resolver import ResDistancesType, install_resolver_rules
 from sicp523_simulator import AssignMstmt, BranchMstmt, ConstMxpr, GotoMstmt, LabelMstmt, LabelMxpr, Mstmt, Mxpr, \
     OpMxpr, PerformMstmt, RegInstPtr, RegMachineState, RegMxpr, RestoreMstmt, SaveMstmt, TestMstmt, \
     get_operations, init_machine_pc, install_assemble_mstmt_rules, install_assemble_mxpr_rules, \
@@ -272,16 +271,15 @@ def compile_set(expr: SetExpr, target: CompileTarget, linkage: SchemeLinkage,
                     RegMxpr('env'), ConstMxpr(dist), ConstMxpr(name_val), RegMxpr(target)])),
     ], set(['env', target]), set(['unev']))
     error_seq = compile_error_call('unev', token)
-    return end_with_linkage(linkage, append_instructions(init_seq, env_seq, error_seq))
+    return end_with_linkage(linkage, preserve_instructions(set(['env']), init_seq, env_seq, error_seq))
 
 
-def compile_define_any(name: Token, source: str, target: CompileTarget):
+def compile_define_any(name: Token, target: CompileTarget):
     '''assuming input is in val'''
-    assert source != 'env'
     env_seq = SchemeCompiledSeq([
         PerformMstmt(OpMxpr('ec_env_define', [
-            RegMxpr('env'), ConstMxpr(StringVal(name.literal)), RegMxpr(source)])),
-    ], set(['env', source]), set())
+            RegMxpr('env'), ConstMxpr(StringVal(name.literal)), RegMxpr(target)])),
+    ], set(['env', target]), set())
     symbol = SymbolVal(name.literal)
     ret_seq = SchemeCompiledSeq(
         [AssignMstmt(target, ConstMxpr(symbol))], set(), set([target]))
@@ -291,9 +289,9 @@ def compile_define_any(name: Token, source: str, target: CompileTarget):
 def compile_define_var(expr: DefineVarExpr, target: CompileTarget, linkage: SchemeLinkage,
                        compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     init_seq = compile_recursive(
-        expr.initializer, 'val', SchemeLinkage(LinkageTag.NEXT))
-    def_seq = compile_define_any(expr.name, 'val', target)
-    return end_with_linkage(linkage, append_instructions(init_seq, def_seq))
+        expr.initializer, target, SchemeLinkage(LinkageTag.NEXT))
+    def_seq = compile_define_any(expr.name, target)
+    return end_with_linkage(linkage, preserve_instructions(set(['env']), init_seq, def_seq))
 
 
 def compile_string(expr: StringExpr, target: CompileTarget, linkage: SchemeLinkage,
@@ -440,8 +438,8 @@ def compile_define_proc_value(name_str: str, pos_paras: List[Token], rest_para: 
 def compile_define_proc_compiled(expr: DefineProcExpr, target: CompileTarget, linkage: SchemeLinkage,
                                  compile_recursive: CompileRecurFuncType, distances: ResDistancesType):
     proc_value_seq = compile_define_proc_value(
-        expr.name.literal, expr.pos_paras, expr.rest_para, expr.body, 'val', compile_recursive)
-    def_seq = compile_define_any(expr.name, 'val', target)
+        expr.name.literal, expr.pos_paras, expr.rest_para, expr.body, target, compile_recursive)
+    def_seq = compile_define_any(expr.name, target)
     return end_with_linkage(linkage, append_instructions(proc_value_seq, def_seq))
 
 
@@ -595,7 +593,8 @@ def compile_call(expr: CallExpr, target: CompileTarget, linkage: SchemeLinkage,
     label_proc_compiled = make_label('call-proc-compiled')
     label_prim = make_label('call-prim')
     label_invalid = make_label('call-invalid')
-    branch_seq = compile_call_branch(label_proc_compiled, label_prim, label_invalid)
+    branch_seq = compile_call_branch(
+        label_proc_compiled, label_prim, label_invalid)
 
     label_end = make_label('call-end')
     branch_linkage = SchemeLinkage(
@@ -848,7 +847,7 @@ def test_one(source: str, **kargs: str):
             assert err.message == kargs['panic']
     except Exception as err:
         # print current instruction and regs
-        print('\n'.join(tstate.outputs[-100:]))
+        print('\n'.join(tstate.outputs[-200:]))
         raise err
     print('----------')
 
@@ -901,7 +900,7 @@ def test_one_recursion(source_tmpl: str, name: str, nrng: Tuple[int, int], get_v
             assert False
         # except Exception as err:
         #     # print current instruction and regs
-        #     print('\n'.join(tstate.outputs[-100:]))
+        #     print('\n'.join(tstate.outputs[-200:]))
             raise err
     print('----------')
 

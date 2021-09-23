@@ -776,7 +776,7 @@ def test_one(source: str, **kargs: str):
             assert err.message == kargs['panic']
     except Exception as err:
         # print current instruction and regs
-        print('\n'.join(tstate.outputs[-100:]))
+        print('\n'.join(tstate.outputs[-200:]))
         raise err
     print('----------')
 
